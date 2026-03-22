@@ -93,7 +93,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     fileSearchContentExtensions: parseExtensionList(
       env.FILE_SEARCH_CONTENT_EXTENSIONS,
-      [".txt", ".md", ".json", ".csv", ".log"],
+      [".txt", ".md", ".json", ".csv", ".log", ".pdf"],
     ),
     fileSearchContentMaxFileSizeBytes: parsePositiveInteger(
       env.FILE_SEARCH_CONTENT_MAX_FILE_SIZE_BYTES,

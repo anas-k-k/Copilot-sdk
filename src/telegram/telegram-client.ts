@@ -104,10 +104,20 @@ export class TelegramClient {
     caption?: string,
     replyToMessageId?: number,
   ): Promise<void> {
+    const extension = path.extname(filePath).toLowerCase();
     const buffer = await fs.readFile(filePath);
     const formData = new FormData();
     formData.set("chat_id", String(chatId));
-    formData.set("document", new File([buffer], path.basename(filePath)));
+    formData.set(
+      "document",
+      new File([buffer], path.basename(filePath), {
+        type: getMimeTypeForPath(filePath),
+        }),
+    );
+
+    if (extension === ".pdf") {
+      formData.set("disable_content_type_detection", "true");
+    }
 
     if (caption?.trim()) {
       formData.set("caption", caption.trim());
@@ -153,6 +163,33 @@ export class TelegramClient {
     }
 
     return payload.result;
+  }
+}
+
+function getMimeTypeForPath(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".pdf":
+      return "application/pdf";
+    case ".txt":
+    case ".log":
+      return "text/plain";
+    case ".md":
+      return "text/markdown";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
   }
 }
 

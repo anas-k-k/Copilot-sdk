@@ -150,7 +150,14 @@ function createConfig(appUserStateRoot: string): AppConfig {
     fileSearchRoots: ["C:\\"],
     fileSearchExcludedRoots: [],
     fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [".txt", ".md", ".json", ".csv", ".log"],
+    fileSearchContentExtensions: [
+      ".txt",
+      ".md",
+      ".json",
+      ".csv",
+      ".log",
+      ".pdf",
+    ],
     fileSearchContentMaxFileSizeBytes: 1_000_000,
     fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
     fileSearchAliases: {

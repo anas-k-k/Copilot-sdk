@@ -224,10 +224,40 @@ describe("TelegramClient", () => {
     expect(formData.get("chat_id")).toBe("555");
     expect(formData.get("caption")).toBe("Requested file");
     expect(formData.get("reply_to_message_id")).toBe("10");
+    expect(formData.get("disable_content_type_detection")).toBeNull();
 
     const document = formData.get("document");
     expect(document).toBeInstanceOf(File);
     expect((document as File).name).toBe("aadhaar-card.txt");
+    expect((document as File).type).toBe("text/plain");
+  });
+
+  it("uploads PDFs with an explicit application/pdf MIME type", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-doc-"));
+    const filePath = path.join(root, "aadhaar-card.pdf");
+    await writeFile(filePath, "pdf-bytes", "utf8");
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new TelegramClient(createConfig(), new Logger("error"));
+    await client.sendDocument(555, filePath);
+
+    const [, request] = fetchMock.mock.calls[0] ?? [];
+    const formData = request?.body as FormData;
+    const document = formData.get("document");
+
+    expect(document).toBeInstanceOf(File);
+    expect((document as File).name).toBe("aadhaar-card.pdf");
+    expect((document as File).type).toBe("application/pdf");
+    expect(formData.get("disable_content_type_detection")).toBe("true");
   });
 });
 
@@ -253,7 +283,14 @@ function createConfig(): AppConfig {
     fileSearchRoots: ["C:\\"],
     fileSearchExcludedRoots: [],
     fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [".txt", ".md", ".json", ".csv", ".log"],
+    fileSearchContentExtensions: [
+      ".txt",
+      ".md",
+      ".json",
+      ".csv",
+      ".log",
+      ".pdf",
+    ],
     fileSearchContentMaxFileSizeBytes: 1_000_000,
     fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
     fileSearchAliases: {

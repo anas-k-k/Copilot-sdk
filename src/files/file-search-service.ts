@@ -40,6 +40,13 @@ interface SearchBudget {
   scannedFiles: number;
 }
 
+type ContentReader = (filePath: string) => Promise<string | undefined>;
+
+interface ContentReaders {
+  readTextFile: ContentReader;
+  readPdfFile: ContentReader;
+}
+
 const controlCharacterPattern = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu;
 const ignoredQueryTokens = new Set([
   "a",
@@ -59,10 +66,22 @@ const ignoredQueryTokens = new Set([
 ]);
 
 export class FileSearchService {
+  private readonly contentReaders: ContentReaders;
+
   public constructor(
     private readonly config: AppConfig,
     private readonly logger: Logger,
-  ) {}
+    contentReaders?: Partial<ContentReaders>,
+  ) {
+    this.contentReaders = {
+      readTextFile:
+        contentReaders?.readTextFile ??
+        ((filePath) => this.readTextFile(filePath)),
+      readPdfFile:
+        contentReaders?.readPdfFile ??
+        ((filePath) => this.readPdfFile(filePath)),
+    };
+  }
 
   public async searchFiles(query: string): Promise<FileSearchResult> {
     const normalizedQuery = this.normalizeQuery(query);
@@ -303,7 +322,7 @@ export class FileSearchService {
       this.config.fileSearchContentExtensions.includes(extension) &&
       stats.size <= this.config.fileSearchContentMaxFileSizeBytes
     ) {
-      const content = await this.readTextFile(filePath);
+      const content = await this.readFileContent(filePath, extension);
       if (content) {
         const normalizedContent = normalizeText(content);
         if (normalizedContent.includes(normalizedQuery.normalized)) {
@@ -336,12 +355,39 @@ export class FileSearchService {
     };
   }
 
+  private async readFileContent(
+    filePath: string,
+    extension: string,
+  ): Promise<string | undefined> {
+    if (extension === ".pdf") {
+      return this.contentReaders.readPdfFile(filePath);
+    }
+
+    return this.contentReaders.readTextFile(filePath);
+  }
+
   private async readTextFile(filePath: string): Promise<string | undefined> {
     try {
       const buffer = await fs.readFile(filePath);
       return buffer.toString("utf8").replaceAll(controlCharacterPattern, " ");
     } catch (error) {
       this.logger.debug("Skipping unreadable file content during file search", {
+        filePath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  private async readPdfFile(filePath: string): Promise<string | undefined> {
+    try {
+      await suppressPdfWarnings();
+      const pdfParse = await loadPdfParse();
+      const buffer = await fs.readFile(filePath);
+      const result = await pdfParse(buffer);
+      return result.text.replaceAll(controlCharacterPattern, " ");
+    } catch (error) {
+      this.logger.debug("Skipping unreadable PDF content during file search", {
         filePath,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -413,4 +459,50 @@ function normalizeText(value: string): string {
 
 function normalizeForComparison(value: string): string {
   return path.resolve(value).toLowerCase();
+}
+
+type PdfParseResult = { text: string };
+type PdfParseFunction = (buffer: Uint8Array) => Promise<PdfParseResult>;
+type PdfJsModule = {
+  VERBOSITY_LEVELS?: {
+    errors?: number;
+  };
+  setVerbosityLevel?: (level: number) => void;
+};
+
+let cachedPdfParse: PdfParseFunction | undefined;
+let pdfWarningsSuppressed = false;
+
+async function loadPdfParse(): Promise<PdfParseFunction> {
+  if (cachedPdfParse) {
+    return cachedPdfParse;
+  }
+
+  const module = (await import("pdf-parse")) as {
+    default?: PdfParseFunction;
+  };
+  const pdfParse = module.default;
+  if (!pdfParse) {
+    throw new Error("pdf-parse did not expose a default export.");
+  }
+
+  cachedPdfParse = pdfParse;
+  return pdfParse;
+}
+
+async function suppressPdfWarnings(): Promise<void> {
+  if (pdfWarningsSuppressed) {
+    return;
+  }
+
+  pdfWarningsSuppressed = true;
+
+  try {
+    const module =
+      (await import("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js")) as PdfJsModule;
+    const errorLevel = module.VERBOSITY_LEVELS?.errors ?? 0;
+    module.setVerbosityLevel?.(errorLevel);
+  } catch {
+    return;
+  }
 }

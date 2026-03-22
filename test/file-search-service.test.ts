@@ -47,6 +47,27 @@ describe("FileSearchService", () => {
     expect(result.candidates[0]?.matchReason).toBe("content");
   });
 
+  it("matches PDF content when a PDF reader extracts relevant text", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "file-search-"));
+    const filePath = path.join(root, "docs", "proof.pdf");
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "pdf-placeholder", "utf8");
+
+    const service = new FileSearchService(
+      createConfig(root),
+      new Logger("error"),
+      {
+        readPdfFile: async () =>
+          "This PDF contains the Aadhaar card confirmation details.",
+      },
+    );
+    const result = await service.searchFiles("adhar card");
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.absolutePath).toBe(filePath);
+    expect(result.candidates[0]?.matchReason).toBe("content");
+  });
+
   it("skips excluded roots and oversized files", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "file-search-"));
     const excludedRoot = path.join(root, "excluded");
@@ -99,7 +120,14 @@ function createConfig(
     fileSearchRoots: [root],
     fileSearchExcludedRoots: [],
     fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [".txt", ".md", ".json", ".csv", ".log"],
+    fileSearchContentExtensions: [
+      ".txt",
+      ".md",
+      ".json",
+      ".csv",
+      ".log",
+      ".pdf",
+    ],
     fileSearchContentMaxFileSizeBytes: 1_000_000,
     fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
     fileSearchAliases: {

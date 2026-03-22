@@ -16,6 +16,7 @@
   "dependencies": {
     "@github/copilot-sdk": "^0.1.8",
     "@googleworkspace/cli": "^0.18.1",
+    "pdf-parse": "^1.1.4",
     "zod": "^4.3.6"
   },
   "devDependencies": {
