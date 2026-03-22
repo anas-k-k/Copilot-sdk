@@ -1,0 +1,607 @@
+import type { CopilotService } from "../copilot/copilot-service.js";
+import type { GoogleWorkspaceService } from "../google-workspace/google-workspace-service.js";
+import type { Logger } from "../logging/logger.js";
+import { MessageQueue } from "../state/message-queue.js";
+import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
+import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
+import type { SkillService } from "../skills/skill-service.js";
+import type {
+  PendingSkillInstallRequest,
+  SkillSearchResult,
+} from "../skills/types.js";
+import { isAffirmative, isNegative } from "../utils/text.js";
+import { TelegramApiError } from "./telegram-client.js";
+import { normalizeTelegramUpdate } from "./update-normalizer.js";
+import type { NormalizedTelegramUpdate } from "./types.js";
+import type { TelegramClient } from "./telegram-client.js";
+
+const telegramTypingRefreshIntervalMs = 4_000;
+
+export class TelegramBot {
+  private readonly messageQueue = new MessageQueue();
+  private offset: number | undefined;
+  private stopped = false;
+
+  public constructor(
+    private readonly telegramClient: TelegramClient,
+    private readonly copilotService: CopilotService,
+    private readonly skillService: SkillService,
+    private readonly installRegistry: SkillInstallRegistry,
+    private readonly googleWorkspaceService: GoogleWorkspaceService,
+    private readonly outboundFileRegistry: OutboundFileRegistry,
+    private readonly logger: Logger,
+    private readonly allowedTelegramUserIds: ReadonlySet<string> = new Set(),
+  ) {}
+
+  public async start(): Promise<void> {
+    await this.preparePolling();
+    this.logger.info("Telegram polling started");
+
+    while (!this.stopped) {
+      try {
+        const updates = await this.telegramClient.getUpdates(this.offset);
+
+        for (const update of updates) {
+          this.offset = update.update_id + 1;
+          const normalized = normalizeTelegramUpdate(update);
+          if (!normalized) {
+            continue;
+          }
+
+          if (
+            this.allowedTelegramUserIds.size > 0 &&
+            !this.allowedTelegramUserIds.has(normalized.userId)
+          ) {
+            this.logger.warn(
+              "Ignoring Telegram message from unauthorized user",
+              {
+                userId: normalized.userId,
+                username: normalized.username,
+                chatId: normalized.chatId,
+                text: normalized.text,
+              },
+            );
+            continue;
+          }
+
+          void this.messageQueue
+            .enqueue(normalized.userId, async () => {
+              await this.processUpdate(normalized);
+            })
+            .catch((error) => {
+              this.logger.error("Telegram update processing failed", {
+                updateId: normalized.updateId,
+                userId: normalized.userId,
+                chatId: normalized.chatId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+        }
+      } catch (error) {
+        if (isGetUpdatesConflict(error)) {
+          this.logger.error(
+            "Telegram polling conflict detected; stopping polling",
+            {
+              error: error.message,
+            },
+          );
+          this.stop();
+          continue;
+        }
+
+        this.logger.error("Polling loop failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+
+        await delay(2000);
+      }
+    }
+  }
+
+  public stop(): void {
+    this.stopped = true;
+  }
+
+  private async preparePolling(): Promise<void> {
+    try {
+      await this.telegramClient.deleteWebhook();
+    } catch (error) {
+      this.logger.warn("Failed to clear Telegram webhook before polling", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async processUpdate(update: NormalizedTelegramUpdate): Promise<void> {
+    this.logger.info("Processing Telegram message", {
+      userId: update.userId,
+      chatId: update.chatId,
+      commandName: update.commandName,
+    });
+
+    await this.runWithTypingIndicator(update.chatId, async () => {
+      if (update.commandName) {
+        await this.handleCommand(update);
+        return;
+      }
+
+      const pending = this.installRegistry.getPending(update.userId);
+      if (pending) {
+        const handled = await this.handlePendingConfirmation(update, pending);
+        if (handled) {
+          return;
+        }
+      }
+
+      const response = await this.copilotService.sendPrompt(
+        update.userId,
+        update.text,
+      );
+      await this.telegramClient.sendMessage(
+        update.chatId,
+        response,
+        update.messageId,
+      );
+      await this.flushPendingFiles(
+        update.userId,
+        update.chatId,
+        update.messageId,
+      );
+    });
+  }
+
+  private async runWithTypingIndicator<T>(
+    chatId: number,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    let stopped = false;
+    let releaseDelay: (() => void) | undefined;
+
+    const typingLoop = (async () => {
+      while (!stopped) {
+        try {
+          await this.telegramClient.sendTypingAction(chatId);
+        } catch (error) {
+          this.logger.warn("Failed to send Telegram typing action", {
+            chatId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+
+        if (stopped) {
+          return;
+        }
+
+        await new Promise<void>((resolve) => {
+          releaseDelay = resolve;
+          setTimeout(resolve, telegramTypingRefreshIntervalMs);
+        });
+        releaseDelay = undefined;
+      }
+    })();
+
+    try {
+      return await action();
+    } finally {
+      stopped = true;
+      releaseDelay?.();
+      await typingLoop;
+    }
+  }
+
+  private async handleCommand(update: NormalizedTelegramUpdate): Promise<void> {
+    switch (update.commandName) {
+      case "start":
+      case "help":
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          [
+            "I can chat through Copilot, search skills, and install skills after confirmation.",
+            "",
+            "Commands:",
+            "/help - show this help",
+            "/reset - start a fresh Copilot session",
+            "/skills - list your installed skills",
+            "/searchskill <query> - search for relevant skills",
+            "/installskill <source> [skill1,skill2] - queue a skill install",
+            "/gmailstatus - check Gmail CLI connectivity",
+            "/gmaillist [query] - list recent Gmail messages",
+            "/gmailread <messageId> - read one Gmail message",
+          ].join("\n"),
+          update.messageId,
+        );
+        return;
+
+      case "reset":
+      case "new":
+        this.installRegistry.clearPending(update.userId);
+        await this.copilotService.resetSession(update.userId);
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          "Started a fresh session.",
+          update.messageId,
+        );
+        return;
+
+      case "skills": {
+        const skills = await this.skillService.listInstalledSkills(
+          update.userId,
+        );
+        const text =
+          skills.length === 0
+            ? "You do not have any installed skills yet."
+            : [
+                "Installed skills:",
+                ...skills.map(
+                  (skill) => `- ${skill.name}: ${skill.description}`,
+                ),
+              ].join("\n");
+        this.installRegistry.rememberInstalled(update.userId, skills);
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          text,
+          update.messageId,
+        );
+        return;
+      }
+
+      case "searchskill": {
+        const query = update.commandArgs?.trim();
+        if (!query) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            "Usage: /searchskill <query>",
+            update.messageId,
+          );
+          return;
+        }
+
+        const results = await this.skillService.searchSkills(query);
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          formatSkillSearch(results),
+          update.messageId,
+        );
+        return;
+      }
+
+      case "installskill": {
+        const args = update.commandArgs?.trim();
+        if (!args) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            "Usage: /installskill <source> [skill1,skill2]",
+            update.messageId,
+          );
+          return;
+        }
+
+        const [sourceCandidate, ...rest] = args.split(/\s+/);
+        const source = sourceCandidate?.trim();
+        if (!source) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            "Usage: /installskill <source> [skill1,skill2]",
+            update.messageId,
+          );
+          return;
+        }
+
+        const requestedSkills = rest
+          .join(" ")
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+        const pending = this.installRegistry.stage(update.userId, {
+          source,
+          requestedSkills,
+          reason: "User requested an explicit skill install from Telegram.",
+          goal: `Use the installed skill from source ${source} to continue helping the user.`,
+        });
+
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          formatPendingInstall(pending),
+          update.messageId,
+        );
+        return;
+      }
+
+      case "gmailstatus": {
+        const status =
+          await this.googleWorkspaceService.getGmailConnectionStatus();
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          formatGmailStatus(status),
+          update.messageId,
+        );
+        return;
+      }
+
+      case "gmaillist": {
+        try {
+          const query = update.commandArgs?.trim();
+          const result = await this.googleWorkspaceService.listGmailMessages({
+            maxResults: 10,
+            ...(query ? { query } : {}),
+          });
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            formatGmailList(result),
+            update.messageId,
+          );
+        } catch (error) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            `Gmail list failed: ${error instanceof Error ? error.message : String(error)}`,
+            update.messageId,
+          );
+        }
+        return;
+      }
+
+      case "gmailread": {
+        const messageId = update.commandArgs?.trim();
+        if (!messageId) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            "Usage: /gmailread <messageId>",
+            update.messageId,
+          );
+          return;
+        }
+
+        try {
+          const message =
+            await this.googleWorkspaceService.readGmailMessage(messageId);
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            formatGmailMessage(message),
+            update.messageId,
+          );
+        } catch (error) {
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            `Gmail read failed: ${error instanceof Error ? error.message : String(error)}`,
+            update.messageId,
+          );
+        }
+        return;
+      }
+
+      default:
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          "Unknown command. Try /help.",
+          update.messageId,
+        );
+    }
+  }
+
+  private async handlePendingConfirmation(
+    update: NormalizedTelegramUpdate,
+    pending: PendingSkillInstallRequest,
+  ): Promise<boolean> {
+    if (isNegative(update.text)) {
+      this.installRegistry.clearPending(update.userId);
+      await this.telegramClient.sendMessage(
+        update.chatId,
+        "Cancelled the pending skill install.",
+        update.messageId,
+      );
+      return true;
+    }
+
+    if (!isAffirmative(update.text)) {
+      return false;
+    }
+
+    await this.telegramClient.sendMessage(
+      update.chatId,
+      "Installing the requested skill now...",
+      update.messageId,
+    );
+    const result = await this.skillService.installSkills(
+      update.userId,
+      pending,
+    );
+    this.installRegistry.clearPending(update.userId);
+    this.installRegistry.rememberInstalled(
+      update.userId,
+      result.installedSkills,
+    );
+    await this.copilotService.invalidateSession(update.userId);
+
+    const installedSummary =
+      result.installedSkills.length === 0
+        ? `Install command completed for ${pending.source}, but no new skill directories were detected.`
+        : `Installed skill${result.installedSkills.length === 1 ? "" : "s"}: ${result.installedSkills
+            .map((skill) => skill.name)
+            .join(", ")}.`;
+
+    await this.telegramClient.sendMessage(
+      update.chatId,
+      installedSummary,
+      update.messageId,
+    );
+
+    const continuation = await this.copilotService.sendPrompt(
+      update.userId,
+      [
+        `The requested skills from ${pending.source} are now installed for this user.`,
+        pending.requestedSkills.length > 0
+          ? `Installed skill names: ${pending.requestedSkills.join(", ")}.`
+          : "Use any newly available installed skill if it helps.",
+        `Continue helping with this goal: ${pending.goal}`,
+      ].join(" "),
+    );
+
+    await this.telegramClient.sendMessage(
+      update.chatId,
+      continuation,
+      update.messageId,
+    );
+    await this.flushPendingFiles(
+      update.userId,
+      update.chatId,
+      update.messageId,
+    );
+    return true;
+  }
+
+  private async flushPendingFiles(
+    userId: string,
+    chatId: number,
+    replyToMessageId?: number,
+  ): Promise<void> {
+    const pendingFiles = this.outboundFileRegistry.drain(userId);
+
+    for (const pendingFile of pendingFiles) {
+      try {
+        await this.telegramClient.sendDocument(
+          chatId,
+          pendingFile.filePath,
+          pendingFile.caption,
+          replyToMessageId,
+        );
+      } catch (error) {
+        this.logger.error("Telegram file upload failed", {
+          userId,
+          chatId,
+          filePath: pendingFile.filePath,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.telegramClient.sendMessage(
+          chatId,
+          `File send failed for ${pendingFile.filePath}: ${error instanceof Error ? error.message : String(error)}`,
+          replyToMessageId,
+        );
+      }
+    }
+  }
+}
+
+function formatSkillSearch(result: SkillSearchResult): string {
+  if (result.candidates.length === 0) {
+    return `No parsed skill candidates were found for "${result.query}".\n\nRaw output:\n${result.rawOutput || "(empty)"}`;
+  }
+
+  return [
+    `Skill search results for "${result.query}":`,
+    ...result.candidates.map((candidate) => `- ${candidate.title}`),
+    "",
+    "If you want one installed, use `/installskill <source> [skill1,skill2]` or ask me in plain language.",
+  ].join("\n");
+}
+
+function formatPendingInstall(pending: PendingSkillInstallRequest): string {
+  const skillList =
+    pending.requestedSkills.length === 0
+      ? "all skills discovered in that source"
+      : pending.requestedSkills.join(", ");
+
+  return [
+    `Pending install request ${pending.id}`,
+    `Source: ${pending.source}`,
+    `Skills: ${skillList}`,
+    "",
+    "Reply YES to confirm or NO to cancel.",
+  ].join("\n");
+}
+
+function formatGmailStatus(status: {
+  configured: boolean;
+  authCheckConfigured: boolean;
+  command?: string;
+  authenticated?: boolean;
+  error?: string;
+}): string {
+  if (!status.configured) {
+    return status.error || "Gmail is not configured.";
+  }
+
+  const lines = [
+    `Google Workspace CLI: ${status.command || "configured"}`,
+    `Auth check configured: ${status.authCheckConfigured ? "yes" : "no"}`,
+  ];
+
+  if (status.authenticated !== undefined) {
+    lines.push(`Authenticated: ${status.authenticated ? "yes" : "no"}`);
+  }
+
+  if (status.error) {
+    lines.push(`Error: ${status.error}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatGmailList(result: {
+  query?: string;
+  messages: Array<{
+    id: string;
+    from?: string;
+    subject?: string;
+    snippet?: string;
+    internalDate?: string;
+  }>;
+}): string {
+  if (result.messages.length === 0) {
+    return result.query
+      ? `No Gmail messages matched \"${result.query}\".`
+      : "No Gmail messages were returned.";
+  }
+
+  return [
+    result.query
+      ? `Gmail messages for \"${result.query}\":`
+      : "Recent Gmail messages:",
+    ...result.messages.map((message) => {
+      const summary = [
+        message.subject || "(no subject)",
+        message.from ? `from ${message.from}` : undefined,
+        message.internalDate ? `at ${message.internalDate}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      return `- ${message.id}: ${summary}${message.snippet ? `\n  ${message.snippet}` : ""}`;
+    }),
+  ].join("\n");
+}
+
+function formatGmailMessage(message: {
+  id: string;
+  from?: string;
+  to?: string;
+  subject?: string;
+  internalDate?: string;
+  bodyText?: string;
+  snippet?: string;
+}): string {
+  return [
+    `Message: ${message.id}`,
+    `Subject: ${message.subject || "(no subject)"}`,
+    message.from ? `From: ${message.from}` : undefined,
+    message.to ? `To: ${message.to}` : undefined,
+    message.internalDate ? `Date: ${message.internalDate}` : undefined,
+    "",
+    message.bodyText || message.snippet || "(no body returned)",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function isGetUpdatesConflict(error: unknown): error is TelegramApiError {
+  return (
+    error instanceof TelegramApiError &&
+    error.method === "getUpdates" &&
+    error.statusCode === 409
+  );
+}
