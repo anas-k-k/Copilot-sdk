@@ -3,19 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/config/env.js";
 import { GoogleWorkspaceService } from "../src/google-workspace/google-workspace-service.js";
 import { Logger } from "../src/logging/logger.js";
+import { createTestConfig } from "./test-config.js";
 
 function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
-  return {
-    telegramBotToken: "token",
-    telegramApiBaseUrl: "https://api.telegram.org",
-    telegramPollingTimeoutSeconds: 30,
-    telegramAllowedUserIds: [],
-    copilotModel: "gpt-5",
-    copilotCliPath: "copilot",
-    copilotLogLevel: "info",
+  return createTestConfig({
     appUserStateRoot: ".\\data\\users",
-    skillsCommand: "npx",
-    skillsAgent: "github-copilot",
     googleWorkspaceCliCommand: "gws",
     googleWorkspaceCliArgs: [],
     gmailStatusArgs: ["auth", "status"],
@@ -36,29 +28,8 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
       "--subject={subject}",
       "--body={body}",
     ],
-    gmailCommandTimeoutMs: 30_000,
-    fileSearchRoots: ["C:\\"],
-    fileSearchExcludedRoots: [],
-    fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [
-      ".txt",
-      ".md",
-      ".json",
-      ".csv",
-      ".log",
-      ".pdf",
-    ],
-    fileSearchContentMaxFileSizeBytes: 1_000_000,
-    fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
-    fileSearchAliases: {
-      adhar: ["aadhaar", "aadhar"],
-      aadhaar: ["adhar", "aadhar"],
-      aadhar: ["aadhaar", "adhar"],
-    },
-    fileSearchMaxDurationMs: 15_000,
-    fileSearchMaxFilesScanned: 20_000,
     ...overrides,
-  };
+  });
 }
 
 describe("GoogleWorkspaceService", () => {

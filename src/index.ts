@@ -2,7 +2,9 @@ import { loadConfig } from "./config/env.js";
 import { CopilotService } from "./copilot/copilot-service.js";
 import { FileSearchService } from "./files/file-search-service.js";
 import { GoogleWorkspaceService } from "./google-workspace/google-workspace-service.js";
+import { HomeMateService } from "./homemate/homemate-service.js";
 import { Logger } from "./logging/logger.js";
+import { HomeMateActionRegistry } from "./state/homemate-action-registry.js";
 import { OutboundFileRegistry } from "./state/outbound-file-registry.js";
 import { SkillInstallRegistry } from "./state/skill-install-registry.js";
 import { SkillService } from "./skills/skill-service.js";
@@ -15,6 +17,8 @@ async function main(): Promise<void> {
   const skillService = new SkillService(config, logger);
   const installRegistry = new SkillInstallRegistry();
   const googleWorkspaceService = new GoogleWorkspaceService(config, logger);
+  const homeMateService = new HomeMateService(config, logger);
+  const homeMateActionRegistry = new HomeMateActionRegistry();
   const fileSearchService = new FileSearchService(config, logger);
   const outboundFileRegistry = new OutboundFileRegistry();
   const copilotService = new CopilotService(
@@ -23,6 +27,8 @@ async function main(): Promise<void> {
     skillService,
     installRegistry,
     googleWorkspaceService,
+    homeMateService,
+    homeMateActionRegistry,
     fileSearchService,
     outboundFileRegistry,
   );
@@ -33,6 +39,8 @@ async function main(): Promise<void> {
     skillService,
     installRegistry,
     googleWorkspaceService,
+    homeMateService,
+    homeMateActionRegistry,
     outboundFileRegistry,
     logger,
     new Set(config.telegramAllowedUserIds),

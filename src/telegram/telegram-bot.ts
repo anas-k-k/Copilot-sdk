@@ -1,6 +1,9 @@
 import type { CopilotService } from "../copilot/copilot-service.js";
 import type { GoogleWorkspaceService } from "../google-workspace/google-workspace-service.js";
+import type { HomeMateService } from "../homemate/homemate-service.js";
 import type { Logger } from "../logging/logger.js";
+import type { PendingHomeMateBulkSwitchAction } from "../state/homemate-action-registry.js";
+import type { HomeMateActionRegistry } from "../state/homemate-action-registry.js";
 import { MessageQueue } from "../state/message-queue.js";
 import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
@@ -28,6 +31,8 @@ export class TelegramBot {
     private readonly skillService: SkillService,
     private readonly installRegistry: SkillInstallRegistry,
     private readonly googleWorkspaceService: GoogleWorkspaceService,
+    private readonly homeMateService: HomeMateService,
+    private readonly homeMateActionRegistry: HomeMateActionRegistry,
     private readonly outboundFileRegistry: OutboundFileRegistry,
     private readonly logger: Logger,
     private readonly allowedTelegramUserIds: ReadonlySet<string> = new Set(),
@@ -125,6 +130,18 @@ export class TelegramBot {
         return;
       }
 
+      const pendingHomeMateAction =
+        this.homeMateActionRegistry.getPendingBulkSwitchAction(update.userId);
+      if (pendingHomeMateAction) {
+        const handled = await this.handlePendingHomeMateBulkAction(
+          update,
+          pendingHomeMateAction,
+        );
+        if (handled) {
+          return;
+        }
+      }
+
       const pending = this.installRegistry.getPending(update.userId);
       if (pending) {
         const handled = await this.handlePendingConfirmation(update, pending);
@@ -196,7 +213,7 @@ export class TelegramBot {
         await this.telegramClient.sendMessage(
           update.chatId,
           [
-            "I can chat through Copilot, search skills, and install skills after confirmation.",
+            "I can chat through Copilot, search skills, install skills after confirmation, and control configured HomeMate switches.",
             "",
             "Commands:",
             "/help - show this help",
@@ -207,6 +224,11 @@ export class TelegramBot {
             "/gmailstatus - check Gmail CLI connectivity",
             "/gmaillist [query] - list recent Gmail messages",
             "/gmailread <messageId> - read one Gmail message",
+            "",
+            "HomeMate is also available in natural language, for example:",
+            "- list my smart switches",
+            "- turn kitchen switch on",
+            "- turn all switches off",
           ].join("\n"),
           update.messageId,
         );
@@ -449,6 +471,43 @@ export class TelegramBot {
     return true;
   }
 
+  private async handlePendingHomeMateBulkAction(
+    update: NormalizedTelegramUpdate,
+    pending: PendingHomeMateBulkSwitchAction,
+  ): Promise<boolean> {
+    if (isNegative(update.text)) {
+      this.homeMateActionRegistry.clearPendingBulkSwitchAction(update.userId);
+      await this.telegramClient.sendMessage(
+        update.chatId,
+        "Cancelled the pending HomeMate bulk switch action.",
+        update.messageId,
+      );
+      return true;
+    }
+
+    if (!isAffirmative(update.text)) {
+      return false;
+    }
+
+    await this.telegramClient.sendMessage(
+      update.chatId,
+      `Applying the pending HomeMate bulk switch action (${pending.requestedState}) now...`,
+      update.messageId,
+    );
+    const result = await this.homeMateService.setSwitchesStateByIds(
+      pending.switchIds,
+      pending.requestedState,
+    );
+    this.homeMateActionRegistry.clearPendingBulkSwitchAction(update.userId);
+
+    await this.telegramClient.sendMessage(
+      update.chatId,
+      formatHomeMateBulkResult(result),
+      update.messageId,
+    );
+    return true;
+  }
+
   private async flushPendingFiles(
     userId: string,
     chatId: number,
@@ -590,6 +649,41 @@ function formatGmailMessage(message: {
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");
+}
+
+function formatHomeMateBulkResult(result: {
+  requestedState: "on" | "off";
+  targetedSwitchCount: number;
+  succeeded: Array<{ id: string; name: string }>;
+  failed: Array<{ id: string; name?: string; error: string }>;
+}): string {
+  const lines = [
+    `HomeMate bulk action completed: ${result.requestedState}`,
+    `Targeted switches: ${result.targetedSwitchCount}`,
+    `Succeeded: ${result.succeeded.length}`,
+    `Failed: ${result.failed.length}`,
+  ];
+
+  if (result.succeeded.length > 0) {
+    lines.push(
+      "",
+      "Succeeded switches:",
+      ...result.succeeded.map((entry) => `- ${entry.name} (${entry.id})`),
+    );
+  }
+
+  if (result.failed.length > 0) {
+    lines.push(
+      "",
+      "Failed switches:",
+      ...result.failed.map(
+        (entry) =>
+          `- ${entry.name ? `${entry.name} ` : ""}(${entry.id}): ${entry.error}`,
+      ),
+    );
+  }
+
+  return lines.join("\n");
 }
 
 function delay(milliseconds: number): Promise<void> {

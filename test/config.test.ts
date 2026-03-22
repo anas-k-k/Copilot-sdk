@@ -36,6 +36,9 @@ describe("loadConfig", () => {
     expect(config.skillsCommand).toBe("npx");
     expect(config.googleWorkspaceCliCommand).toBeUndefined();
     expect(config.gmailListArgs).toEqual([]);
+    expect(config.homeMateApiBaseUrl).toBeUndefined();
+    expect(config.homeMateSetSwitchStateMethod).toBe("PATCH");
+    expect(config.homeMateBulkSetSwitchStateMethod).toBe("POST");
   });
 
   it("parses allowed Telegram user ids", () => {
@@ -146,6 +149,23 @@ describe("loadConfig", () => {
 
   it("throws when the Telegram token is missing", () => {
     expect(() => loadConfig({})).toThrow("Missing TELEGRAM_BOT_TOKEN.");
+  });
+
+  it("parses HomeMate API settings", () => {
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: "token",
+      HOMEMATE_API_BASE_URL: "https://api.example.test/v1",
+      HOMEMATE_API_TOKEN: "secret",
+      HOMEMATE_API_HEADERS: '{"x-home-id":"123"}',
+      HOMEMATE_ALLOWED_SWITCH_IDS: "switch-1 switch-2",
+      HOMEMATE_SET_SWITCH_STATE_METHOD: "post",
+    });
+
+    expect(config.homeMateApiBaseUrl).toBe("https://api.example.test/v1");
+    expect(config.homeMateApiToken).toBe("secret");
+    expect(config.homeMateApiHeaders).toEqual({ "x-home-id": "123" });
+    expect(config.homeMateAllowedSwitchIds).toEqual(["switch-1", "switch-2"]);
+    expect(config.homeMateSetSwitchStateMethod).toBe("POST");
   });
 
   it("loads the Telegram token from a workspace .env file", () => {

@@ -8,6 +8,7 @@ import type { AppConfig } from "../src/config/env.js";
 import { Logger } from "../src/logging/logger.js";
 import { SkillService } from "../src/skills/skill-service.js";
 import type { ExecText } from "../src/utils/process.js";
+import { createTestConfig } from "./test-config.js";
 
 describe("SkillService", () => {
   it("lists installed skills from the user workspace", async () => {
@@ -129,43 +130,7 @@ description: Helps with frontend design work
 });
 
 function createConfig(appUserStateRoot: string): AppConfig {
-  return {
-    telegramBotToken: "token",
-    telegramApiBaseUrl: "https://api.telegram.org",
-    telegramPollingTimeoutSeconds: 30,
-    telegramAllowedUserIds: [],
-    copilotModel: "gpt-5",
-    copilotCliPath: "copilot",
-    copilotLogLevel: "info",
+  return createTestConfig({
     appUserStateRoot,
-    skillsCommand: "npx",
-    skillsAgent: "github-copilot",
-    googleWorkspaceCliCommand: undefined,
-    googleWorkspaceCliArgs: [],
-    gmailStatusArgs: [],
-    gmailListArgs: [],
-    gmailReadArgs: [],
-    gmailSendArgs: [],
-    gmailCommandTimeoutMs: 30_000,
-    fileSearchRoots: ["C:\\"],
-    fileSearchExcludedRoots: [],
-    fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [
-      ".txt",
-      ".md",
-      ".json",
-      ".csv",
-      ".log",
-      ".pdf",
-    ],
-    fileSearchContentMaxFileSizeBytes: 1_000_000,
-    fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
-    fileSearchAliases: {
-      adhar: ["aadhaar", "aadhar"],
-      aadhaar: ["adhar", "aadhar"],
-      aadhar: ["aadhaar", "adhar"],
-    },
-    fileSearchMaxDurationMs: 15_000,
-    fileSearchMaxFilesScanned: 20_000,
-  };
+  });
 }

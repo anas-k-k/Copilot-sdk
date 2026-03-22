@@ -7,7 +7,9 @@ import { z } from "zod";
 import type { AppConfig } from "../config/env.js";
 import type { FileSearchService } from "../files/file-search-service.js";
 import type { GoogleWorkspaceService } from "../google-workspace/google-workspace-service.js";
+import type { HomeMateService } from "../homemate/homemate-service.js";
 import type { Logger } from "../logging/logger.js";
+import type { HomeMateActionRegistry } from "../state/homemate-action-registry.js";
 import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import { SessionRegistry } from "../state/session-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
@@ -26,6 +28,8 @@ export class CopilotService {
     private readonly skillService: SkillService,
     private readonly installRegistry: SkillInstallRegistry,
     private readonly googleWorkspaceService: GoogleWorkspaceService,
+    private readonly homeMateService: HomeMateService,
+    private readonly homeMateActionRegistry: HomeMateActionRegistry,
     private readonly fileSearchService: FileSearchService,
     private readonly outboundFileRegistry: OutboundFileRegistry,
   ) {
@@ -268,6 +272,81 @@ export class CopilotService {
               this.googleWorkspaceService.sendGmailMessage(request),
             );
           },
+        }),
+        defineTool("homemate_connection_status", {
+          description:
+            "Check whether the HomeMate API is configured and reachable.",
+          parameters: z.object({}),
+          handler: async () =>
+            safeToolResult(() => this.homeMateService.getConnectionStatus()),
+        }),
+        defineTool("homemate_list_switches", {
+          description:
+            "List available HomeMate smart switches with ids, names, and current states.",
+          parameters: z.object({}),
+          handler: async () =>
+            safeToolResult(() => this.homeMateService.listSwitches()),
+        }),
+        defineTool("homemate_get_switch", {
+          description:
+            "Get the current state of a specific HomeMate smart switch by id or exact name.",
+          parameters: z.object({
+            identifier: z
+              .string()
+              .min(1)
+              .describe("Switch id or exact switch name."),
+          }),
+          handler: async ({ identifier }) =>
+            safeToolResult(() => this.homeMateService.getSwitch(identifier)),
+        }),
+        defineTool("homemate_set_switch_state", {
+          description:
+            "Turn a specific HomeMate smart switch on or off by id or exact name.",
+          parameters: z.object({
+            identifier: z
+              .string()
+              .min(1)
+              .describe("Switch id or exact switch name."),
+            state: z
+              .enum(["on", "off"])
+              .describe("Desired target state for the switch."),
+          }),
+          handler: async ({ identifier, state }) =>
+            safeToolResult(() =>
+              this.homeMateService.setSwitchState(identifier, state),
+            ),
+        }),
+        defineTool("queue_homemate_bulk_switch_state", {
+          description:
+            "Queue a bulk HomeMate switch action that still needs explicit user confirmation.",
+          parameters: z.object({
+            state: z
+              .enum(["on", "off"])
+              .describe("Desired target state for all known switches."),
+          }),
+          handler: async ({ state }) =>
+            safeToolResult(async () => {
+              const staged =
+                await this.homeMateService.stageAllKnownSwitches(state);
+              const pending = this.homeMateActionRegistry.stageBulkSwitchAction(
+                userId,
+                {
+                  requestedState: staged.requestedState,
+                  switchIds: staged.switches.map((entry) => entry.id),
+                  switchNames: staged.switches.map((entry) => entry.name),
+                },
+              );
+
+              return {
+                queued: true,
+                requestId: pending.id,
+                requestedState: pending.requestedState,
+                switchCount: pending.switchIds.length,
+                switchNames: pending.switchNames,
+                confirmationMessage:
+                  "A pending bulk HomeMate switch action has been created. Ask the user to reply YES to confirm or NO to cancel.",
+              };
+            }),
         }),
         defineTool("search_local_files", {
           description:

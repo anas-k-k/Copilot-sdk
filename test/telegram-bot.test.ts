@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { HomeMateActionRegistry } from "../src/state/homemate-action-registry.js";
 import { OutboundFileRegistry } from "../src/state/outbound-file-registry.js";
 import { TelegramBot } from "../src/telegram/telegram-bot.js";
 import { TelegramApiError } from "../src/telegram/telegram-client.js";
@@ -36,6 +37,8 @@ describe("TelegramBot", () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
+      new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       new Logger("info"),
       new Set(),
@@ -100,6 +103,8 @@ describe("TelegramBot", () => {
         getPending: vi.fn(),
       } as never,
       {} as never,
+      {} as never,
+      new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       new Logger("debug"),
       new Set(["8661077453"]),
@@ -177,6 +182,8 @@ describe("TelegramBot", () => {
           baseArgs: [],
         }),
       } as never,
+      {} as never,
+      new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       new Logger("info"),
       new Set(),
@@ -261,6 +268,8 @@ describe("TelegramBot", () => {
         getPending: vi.fn(),
       } as never,
       {} as never,
+      {} as never,
+      new HomeMateActionRegistry(),
       outboundFileRegistry,
       new Logger("info"),
       new Set(),
@@ -297,6 +306,100 @@ describe("TelegramBot", () => {
     expect(firstTypingCall!).toBeLessThan(firstMessageCall!);
 
     vi.useRealTimers();
+
+    errorSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  it("executes a pending HomeMate bulk action after YES confirmation", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    let getUpdatesCalls = 0;
+
+    const telegramClient = {
+      deleteWebhook: async () => {},
+      getUpdates: async () => {
+        getUpdatesCalls += 1;
+
+        if (getUpdatesCalls === 1) {
+          return [
+            {
+              update_id: 1,
+              message: {
+                message_id: 10,
+                text: "YES",
+                chat: { id: 555 },
+                from: { id: 8661077453, username: "anas" },
+              },
+            },
+          ];
+        }
+
+        throw new TelegramApiError(
+          "getUpdates",
+          409,
+          "Conflict: terminated by other getUpdates request; make sure that only one bot instance is running",
+        );
+      },
+      sendTypingAction: async () => {},
+      sendMessage,
+      sendDocument: async () => {},
+    } as never;
+
+    const actionRegistry = new HomeMateActionRegistry();
+    actionRegistry.stageBulkSwitchAction("8661077453", {
+      requestedState: "off",
+      switchIds: ["switch-1", "switch-2"],
+      switchNames: ["Kitchen", "Hall"],
+    });
+
+    const bot = new TelegramBot(
+      telegramClient,
+      {} as never,
+      {} as never,
+      {
+        getPending: vi.fn(),
+      } as never,
+      {} as never,
+      {
+        setSwitchesStateByIds: vi.fn().mockResolvedValue({
+          requestedState: "off",
+          targetedSwitchCount: 2,
+          succeeded: [
+            { id: "switch-1", name: "Kitchen" },
+            { id: "switch-2", name: "Hall" },
+          ],
+          failed: [],
+        }),
+      } as never,
+      actionRegistry,
+      new OutboundFileRegistry(),
+      new Logger("info"),
+      new Set(),
+    );
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await bot.start();
+
+    await vi.waitFor(() => {
+      expect(sendMessage).toHaveBeenCalledTimes(2);
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      555,
+      "Applying the pending HomeMate bulk switch action (off) now...",
+      10,
+    );
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      555,
+      expect.stringContaining("HomeMate bulk action completed: off"),
+      10,
+    );
+    expect(
+      actionRegistry.getPendingBulkSwitchAction("8661077453"),
+    ).toBeUndefined();
 
     errorSpy.mockRestore();
     logSpy.mockRestore();

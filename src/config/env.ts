@@ -24,6 +24,21 @@ export interface AppConfig {
   gmailReadArgs: string[];
   gmailSendArgs: string[];
   gmailCommandTimeoutMs: number;
+  homeMateApiBaseUrl: string | undefined;
+  homeMateApiToken: string | undefined;
+  homeMateApiTokenHeader: string;
+  homeMateApiTokenPrefix: string;
+  homeMateApiHeaders: Record<string, string>;
+  homeMateApiTimeoutMs: number;
+  homeMateListSwitchesPath: string;
+  homeMateGetSwitchPath: string;
+  homeMateSetSwitchStatePath: string;
+  homeMateSetSwitchStateMethod: string;
+  homeMateSetSwitchStateBodyTemplate: string;
+  homeMateBulkSetSwitchStatePath: string | undefined;
+  homeMateBulkSetSwitchStateMethod: string;
+  homeMateBulkSetSwitchStateBodyTemplate: string;
+  homeMateAllowedSwitchIds: string[];
   fileSearchRoots: string[];
   fileSearchExcludedRoots: string[];
   fileSearchMaxResults: number;
@@ -77,6 +92,46 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       env.GMAIL_COMMAND_TIMEOUT_MS,
       30_000,
       "GMAIL_COMMAND_TIMEOUT_MS",
+    ),
+    homeMateApiBaseUrl: normalizeOptionalString(env.HOMEMATE_API_BASE_URL),
+    homeMateApiToken: normalizeOptionalString(env.HOMEMATE_API_TOKEN),
+    homeMateApiTokenHeader:
+      normalizeOptionalString(env.HOMEMATE_API_TOKEN_HEADER) || "Authorization",
+    homeMateApiTokenPrefix: env.HOMEMATE_API_TOKEN_PREFIX ?? "Bearer ",
+    homeMateApiHeaders: parseStringMap(env.HOMEMATE_API_HEADERS),
+    homeMateApiTimeoutMs: parsePositiveInteger(
+      env.HOMEMATE_API_TIMEOUT_MS,
+      15_000,
+      "HOMEMATE_API_TIMEOUT_MS",
+    ),
+    homeMateListSwitchesPath:
+      normalizeOptionalString(env.HOMEMATE_LIST_SWITCHES_PATH) || "/devices",
+    homeMateGetSwitchPath:
+      normalizeOptionalString(env.HOMEMATE_GET_SWITCH_PATH) ||
+      "/devices/{deviceId}",
+    homeMateSetSwitchStatePath:
+      normalizeOptionalString(env.HOMEMATE_SET_SWITCH_STATE_PATH) ||
+      "/devices/{deviceId}",
+    homeMateSetSwitchStateMethod: parseHttpMethod(
+      env.HOMEMATE_SET_SWITCH_STATE_METHOD,
+      "PATCH",
+      "HOMEMATE_SET_SWITCH_STATE_METHOD",
+    ),
+    homeMateSetSwitchStateBodyTemplate:
+      env.HOMEMATE_SET_SWITCH_STATE_BODY_TEMPLATE || '{"state":"{state}"}',
+    homeMateBulkSetSwitchStatePath: normalizeOptionalString(
+      env.HOMEMATE_BULK_SET_SWITCH_STATE_PATH,
+    ),
+    homeMateBulkSetSwitchStateMethod: parseHttpMethod(
+      env.HOMEMATE_BULK_SET_SWITCH_STATE_METHOD,
+      "POST",
+      "HOMEMATE_BULK_SET_SWITCH_STATE_METHOD",
+    ),
+    homeMateBulkSetSwitchStateBodyTemplate:
+      env.HOMEMATE_BULK_SET_SWITCH_STATE_BODY_TEMPLATE ||
+      '{"deviceIds":{deviceIdsJson},"state":"{state}"}',
+    homeMateAllowedSwitchIds: parseIdentifierList(
+      env.HOMEMATE_ALLOWED_SWITCH_IDS,
     ),
     fileSearchRoots: parsePathList(
       env.FILE_SEARCH_ROOTS,
@@ -217,6 +272,54 @@ function parseIdentifierList(rawValue: string | undefined): string[] {
     .split(/[\s,]+/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+function parseStringMap(rawValue: string | undefined): Record<string, string> {
+  const value = rawValue?.trim();
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.fromEntries(
+        Object.entries(parsed).flatMap(([key, entryValue]) =>
+          typeof entryValue === "string" && key.trim()
+            ? [[key.trim(), entryValue]]
+            : [],
+        ),
+      );
+    }
+  } catch {
+    // Fall through to delimiter-based parsing.
+  }
+
+  return Object.fromEntries(
+    value
+      .split(/[;\n]+/u)
+      .map((entry) => entry.split("="))
+      .flatMap(([key, entryValue]) => {
+        const normalizedKey = key?.trim();
+        const normalizedValue = entryValue?.trim();
+        return normalizedKey && normalizedValue
+          ? [[normalizedKey, normalizedValue]]
+          : [];
+      }),
+  );
+}
+
+function parseHttpMethod(
+  rawValue: string | undefined,
+  fallback: string,
+  envName: string,
+): string {
+  const normalized = rawValue?.trim().toUpperCase() || fallback;
+  if (["GET", "POST", "PUT", "PATCH", "DELETE"].includes(normalized)) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid ${envName}: ${rawValue}`);
 }
 
 function parsePathList(

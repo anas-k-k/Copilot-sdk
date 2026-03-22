@@ -10,6 +10,7 @@ import {
   TelegramApiError,
   TelegramClient,
 } from "../src/telegram/telegram-client.js";
+import { createTestConfig } from "./test-config.js";
 
 describe("TelegramClient", () => {
   afterEach(() => {
@@ -262,43 +263,5 @@ describe("TelegramClient", () => {
 });
 
 function createConfig(): AppConfig {
-  return {
-    telegramBotToken: "token",
-    telegramApiBaseUrl: "https://api.telegram.org",
-    telegramPollingTimeoutSeconds: 30,
-    telegramAllowedUserIds: [],
-    copilotModel: "gpt-5",
-    copilotCliPath: "copilot",
-    copilotLogLevel: "info",
-    appUserStateRoot: "C:\\temp",
-    skillsCommand: "npx",
-    skillsAgent: "github-copilot",
-    googleWorkspaceCliCommand: undefined,
-    googleWorkspaceCliArgs: [],
-    gmailStatusArgs: [],
-    gmailListArgs: [],
-    gmailReadArgs: [],
-    gmailSendArgs: [],
-    gmailCommandTimeoutMs: 30_000,
-    fileSearchRoots: ["C:\\"],
-    fileSearchExcludedRoots: [],
-    fileSearchMaxResults: 10,
-    fileSearchContentExtensions: [
-      ".txt",
-      ".md",
-      ".json",
-      ".csv",
-      ".log",
-      ".pdf",
-    ],
-    fileSearchContentMaxFileSizeBytes: 1_000_000,
-    fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
-    fileSearchAliases: {
-      adhar: ["aadhaar", "aadhar"],
-      aadhaar: ["adhar", "aadhar"],
-      aadhar: ["aadhaar", "adhar"],
-    },
-    fileSearchMaxDurationMs: 15_000,
-    fileSearchMaxFilesScanned: 20_000,
-  };
+  return createTestConfig();
 }
