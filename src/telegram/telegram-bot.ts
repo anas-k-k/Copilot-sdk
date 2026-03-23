@@ -4,12 +4,20 @@ import type { HomeMateService } from "../homemate/homemate-service.js";
 import type { Logger } from "../logging/logger.js";
 import type { PendingHomeMateBulkSwitchAction } from "../state/homemate-action-registry.js";
 import type { HomeMateActionRegistry } from "../state/homemate-action-registry.js";
-import { MessageQueue } from "../state/message-queue.js";
-import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
+import {
+  MessageQueue,
+  MessageQueueTimeoutError,
+} from "../state/message-queue.js";
+import type {
+  OutboundFileRegistry,
+  PendingOutboundFile,
+} from "../state/outbound-file-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
+import type { DelegatedJobDispatcher } from "../subagents/job-dispatcher.js";
 import type { SkillService } from "../skills/skill-service.js";
 import type {
   PendingSkillInstallRequest,
+  SkillInstallResult,
   SkillSearchResult,
 } from "../skills/types.js";
 import { isAffirmative, isNegative } from "../utils/text.js";
@@ -20,8 +28,14 @@ import type { TelegramClient } from "./telegram-client.js";
 
 const telegramTypingRefreshIntervalMs = 4_000;
 
+interface SkillInstallJobResult {
+  result: SkillInstallResult;
+  continuation: string;
+  pendingFiles: PendingOutboundFile[];
+}
+
 export class TelegramBot {
-  private readonly messageQueue = new MessageQueue();
+  private readonly messageQueue: MessageQueue;
   private offset: number | undefined;
   private stopped = false;
 
@@ -34,9 +48,13 @@ export class TelegramBot {
     private readonly homeMateService: HomeMateService,
     private readonly homeMateActionRegistry: HomeMateActionRegistry,
     private readonly outboundFileRegistry: OutboundFileRegistry,
+    private readonly delegatedJobDispatcher: DelegatedJobDispatcher,
     private readonly logger: Logger,
     private readonly allowedTelegramUserIds: ReadonlySet<string> = new Set(),
-  ) {}
+    messageQueueTimeoutMs = 300_000,
+  ) {
+    this.messageQueue = new MessageQueue(messageQueueTimeoutMs);
+  }
 
   public async start(): Promise<void> {
     await this.preparePolling();
@@ -73,13 +91,21 @@ export class TelegramBot {
             .enqueue(normalized.userId, async () => {
               await this.processUpdate(normalized);
             })
-            .catch((error) => {
+            .catch(async (error) => {
               this.logger.error("Telegram update processing failed", {
                 updateId: normalized.updateId,
                 userId: normalized.userId,
                 chatId: normalized.chatId,
                 error: error instanceof Error ? error.message : String(error),
               });
+
+              if (error instanceof MessageQueueTimeoutError) {
+                await this.telegramClient.sendMessage(
+                  normalized.chatId,
+                  "That task is still running longer than expected, so I released your queue. You can keep chatting, or retry with a narrower scope.",
+                  normalized.messageId,
+                );
+              }
             });
         }
       } catch (error) {
@@ -237,7 +263,7 @@ export class TelegramBot {
       case "reset":
       case "new":
         this.installRegistry.clearPending(update.userId);
-        await this.copilotService.resetSession(update.userId);
+        await this.copilotService.invalidateUserSessions(update.userId);
         await this.telegramClient.sendMessage(
           update.chatId,
           "Started a fresh session.",
@@ -420,54 +446,93 @@ export class TelegramBot {
 
     await this.telegramClient.sendMessage(
       update.chatId,
-      "Installing the requested skill now...",
+      "Installing the requested skill in the background now. I'll send a follow-up when it finishes.",
       update.messageId,
     );
-    const result = await this.skillService.installSkills(
-      update.userId,
-      pending,
+    const job = this.delegatedJobDispatcher.dispatch<SkillInstallJobResult>(
+      {
+        kind: "skill-install",
+        userId: update.userId,
+        role: "skill-installer",
+        summary: `Install skills from ${pending.source}`,
+      },
+      async () => {
+        const result = await this.skillService.installSkills(
+          update.userId,
+          pending,
+        );
+        this.installRegistry.rememberInstalled(
+          update.userId,
+          result.installedSkills,
+        );
+        await this.copilotService.invalidateUserSessions(update.userId);
+
+        const continuation = await this.copilotService.sendPrompt(
+          update.userId,
+          [
+            `The requested skills from ${pending.source} are now installed for this user.`,
+            pending.requestedSkills.length > 0
+              ? `Installed skill names: ${pending.requestedSkills.join(", ")}.`
+              : "Use any newly available installed skill if it helps.",
+            `Continue helping with this goal: ${pending.goal}`,
+          ].join(" "),
+          "skill-installer",
+        );
+
+        return {
+          result,
+          continuation,
+          pendingFiles: this.outboundFileRegistry.drain(update.userId),
+        };
+      },
     );
+
     this.installRegistry.clearPending(update.userId);
-    this.installRegistry.rememberInstalled(
-      update.userId,
-      result.installedSkills,
-    );
-    await this.copilotService.invalidateSession(update.userId);
-
-    const installedSummary =
-      result.installedSkills.length === 0
-        ? `Install command completed for ${pending.source}, but no new skill directories were detected.`
-        : `Installed skill${result.installedSkills.length === 1 ? "" : "s"}: ${result.installedSkills
-            .map((skill) => skill.name)
-            .join(", ")}.`;
-
     await this.telegramClient.sendMessage(
       update.chatId,
-      installedSummary,
+      `Background job started: ${job.id}`,
       update.messageId,
     );
 
-    const continuation = await this.copilotService.sendPrompt(
-      update.userId,
-      [
-        `The requested skills from ${pending.source} are now installed for this user.`,
-        pending.requestedSkills.length > 0
-          ? `Installed skill names: ${pending.requestedSkills.join(", ")}.`
-          : "Use any newly available installed skill if it helps.",
-        `Continue helping with this goal: ${pending.goal}`,
-      ].join(" "),
-    );
+    void job.completion
+      .then(async ({ result, continuation, pendingFiles }) => {
+        const installedSummary =
+          result.installedSkills.length === 0
+            ? `Install command completed for ${pending.source}, but no new skill directories were detected.`
+            : `Installed skill${result.installedSkills.length === 1 ? "" : "s"}: ${result.installedSkills
+                .map((skill) => skill.name)
+                .join(", ")}.`;
 
-    await this.telegramClient.sendMessage(
-      update.chatId,
-      continuation,
-      update.messageId,
-    );
-    await this.flushPendingFiles(
-      update.userId,
-      update.chatId,
-      update.messageId,
-    );
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          installedSummary,
+          update.messageId,
+        );
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          continuation,
+          update.messageId,
+        );
+        await this.sendPendingFiles(
+          update.userId,
+          update.chatId,
+          pendingFiles,
+          update.messageId,
+        );
+      })
+      .catch(async (error) => {
+        this.logger.error("Background skill install failed", {
+          userId: update.userId,
+          source: pending.source,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.telegramClient.sendMessage(
+          update.chatId,
+          `Skill install failed: ${error instanceof Error ? error.message : String(error)}`,
+          update.messageId,
+        );
+      });
+
     return true;
   }
 
@@ -513,8 +578,20 @@ export class TelegramBot {
     chatId: number,
     replyToMessageId?: number,
   ): Promise<void> {
-    const pendingFiles = this.outboundFileRegistry.drain(userId);
+    await this.sendPendingFiles(
+      userId,
+      chatId,
+      this.outboundFileRegistry.drain(userId),
+      replyToMessageId,
+    );
+  }
 
+  private async sendPendingFiles(
+    userId: string,
+    chatId: number,
+    pendingFiles: PendingOutboundFile[],
+    replyToMessageId?: number,
+  ): Promise<void> {
     for (const pendingFile of pendingFiles) {
       try {
         await this.telegramClient.sendDocument(

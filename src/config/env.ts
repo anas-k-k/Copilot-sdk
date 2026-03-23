@@ -14,9 +14,14 @@ export interface AppConfig {
   copilotModel: string;
   copilotCliPath: string;
   copilotLogLevel: CopilotLogLevel;
+  copilotRequestTimeoutMs: number;
+  copilotDelegatedRequestTimeoutMs: number;
   appUserStateRoot: string;
   skillsCommand: string;
   skillsAgent: string;
+  skillInstallTimeoutMs: number;
+  delegatedJobTimeoutMs: number;
+  messageQueueTimeoutMs: number;
   googleWorkspaceCliCommand: string | undefined;
   googleWorkspaceCliArgs: string[];
   gmailStatusArgs: string[];
@@ -73,11 +78,36 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     copilotModel: env.COPILOT_MODEL?.trim() || "gpt-5",
     copilotCliPath: resolveCopilotCliPath(env.COPILOT_CLI_PATH),
     copilotLogLevel: parseCopilotLogLevel(env.COPILOT_LOG_LEVEL),
+    copilotRequestTimeoutMs: parsePositiveInteger(
+      env.COPILOT_REQUEST_TIMEOUT_MS,
+      180_000,
+      "COPILOT_REQUEST_TIMEOUT_MS",
+    ),
+    copilotDelegatedRequestTimeoutMs: parsePositiveInteger(
+      env.COPILOT_DELEGATED_REQUEST_TIMEOUT_MS,
+      120_000,
+      "COPILOT_DELEGATED_REQUEST_TIMEOUT_MS",
+    ),
     appUserStateRoot: path.resolve(
       env.APP_USER_STATE_ROOT?.trim() || ".\\data\\users",
     ),
     skillsCommand: env.SKILLS_COMMAND?.trim() || "npx",
     skillsAgent: env.SKILLS_AGENT?.trim() || "github-copilot",
+    skillInstallTimeoutMs: parsePositiveInteger(
+      env.SKILL_INSTALL_TIMEOUT_MS,
+      180_000,
+      "SKILL_INSTALL_TIMEOUT_MS",
+    ),
+    delegatedJobTimeoutMs: parsePositiveInteger(
+      env.DELEGATED_JOB_TIMEOUT_MS,
+      240_000,
+      "DELEGATED_JOB_TIMEOUT_MS",
+    ),
+    messageQueueTimeoutMs: parsePositiveInteger(
+      env.MESSAGE_QUEUE_TIMEOUT_MS,
+      300_000,
+      "MESSAGE_QUEUE_TIMEOUT_MS",
+    ),
     googleWorkspaceCliCommand: resolveGoogleWorkspaceCliPath(
       env.GOOGLE_WORKSPACE_CLI_COMMAND,
     ),

@@ -7,6 +7,7 @@ import { Logger } from "./logging/logger.js";
 import { HomeMateActionRegistry } from "./state/homemate-action-registry.js";
 import { OutboundFileRegistry } from "./state/outbound-file-registry.js";
 import { SkillInstallRegistry } from "./state/skill-install-registry.js";
+import { DelegatedJobDispatcher } from "./subagents/job-dispatcher.js";
 import { SkillService } from "./skills/skill-service.js";
 import { TelegramBot } from "./telegram/telegram-bot.js";
 import { TelegramClient } from "./telegram/telegram-client.js";
@@ -21,6 +22,10 @@ async function main(): Promise<void> {
   const homeMateActionRegistry = new HomeMateActionRegistry();
   const fileSearchService = new FileSearchService(config, logger);
   const outboundFileRegistry = new OutboundFileRegistry();
+  const delegatedJobDispatcher = new DelegatedJobDispatcher(
+    logger,
+    config.delegatedJobTimeoutMs,
+  );
   const copilotService = new CopilotService(
     config,
     logger,
@@ -42,8 +47,10 @@ async function main(): Promise<void> {
     homeMateService,
     homeMateActionRegistry,
     outboundFileRegistry,
+    delegatedJobDispatcher,
     logger,
     new Set(config.telegramAllowedUserIds),
+    config.messageQueueTimeoutMs,
   );
 
   registerShutdown(logger, telegramBot, copilotService);

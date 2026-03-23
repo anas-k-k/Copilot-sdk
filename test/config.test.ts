@@ -33,7 +33,12 @@ describe("loadConfig", () => {
     expect(config.telegramBotToken).toBe("token");
     expect(config.telegramAllowedUserIds).toEqual([]);
     expect(config.copilotModel).toBe("gpt-5");
+    expect(config.copilotRequestTimeoutMs).toBe(180_000);
+    expect(config.copilotDelegatedRequestTimeoutMs).toBe(120_000);
     expect(config.skillsCommand).toBe("npx");
+    expect(config.skillInstallTimeoutMs).toBe(180_000);
+    expect(config.delegatedJobTimeoutMs).toBe(240_000);
+    expect(config.messageQueueTimeoutMs).toBe(300_000);
     expect(config.googleWorkspaceCliCommand).toBeUndefined();
     expect(config.gmailListArgs).toEqual([]);
     expect(config.homeMateApiBaseUrl).toBeUndefined();

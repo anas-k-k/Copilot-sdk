@@ -36,7 +36,9 @@ export class SkillService {
 
   public async ensureUserWorkspace(userId: string): Promise<void> {
     await fs.mkdir(this.getUserProjectRoot(userId), { recursive: true });
-    await fs.mkdir(this.getInstalledSkillDirectory(userId), { recursive: true });
+    await fs.mkdir(this.getInstalledSkillDirectory(userId), {
+      recursive: true,
+    });
   }
 
   public async searchSkills(query: string): Promise<SkillSearchResult> {
@@ -62,7 +64,10 @@ export class SkillService {
 
     const rawOutput = [stdout, stderr].filter(Boolean).join("\n").trim();
     const candidates = parseSearchCandidates(rawOutput);
-    this.logger.info("Skill search completed", { query: trimmedQuery, candidates: candidates.length });
+    this.logger.info("Skill search completed", {
+      query: trimmedQuery,
+      candidates: candidates.length,
+    });
 
     return {
       query: trimmedQuery,
@@ -105,15 +110,19 @@ export class SkillService {
       requestedSkills: request.requestedSkills,
     });
 
-    const { stdout, stderr } = await this.execText(this.config.skillsCommand, args, {
-      cwd: this.getUserProjectRoot(userId),
-      env: {
-        ...process.env,
-        DISABLE_TELEMETRY: "1",
-        DO_NOT_TRACK: "1",
+    const { stdout, stderr } = await this.execText(
+      this.config.skillsCommand,
+      args,
+      {
+        cwd: this.getUserProjectRoot(userId),
+        env: {
+          ...process.env,
+          DISABLE_TELEMETRY: "1",
+          DO_NOT_TRACK: "1",
+        },
+        timeoutMs: this.config.skillInstallTimeoutMs,
       },
-      timeoutMs: 180_000,
-    });
+    );
 
     const allSkills = await this.listInstalledSkills(userId);
     const previousNames = new Set(previousSkills.map((skill) => skill.name));
@@ -136,7 +145,9 @@ export class SkillService {
   }
 }
 
-async function readSkillsFromDirectory(directoryPath: string): Promise<SkillMetadata[]> {
+async function readSkillsFromDirectory(
+  directoryPath: string,
+): Promise<SkillMetadata[]> {
   try {
     const entries = await fs.readdir(directoryPath, { withFileTypes: true });
     const skills: SkillMetadata[] = [];
@@ -154,7 +165,8 @@ async function readSkillsFromDirectory(directoryPath: string): Promise<SkillMeta
         const parsed = parseFrontmatter(markdown);
         skills.push({
           name: parsed.attributes.name || entry.name,
-          description: parsed.attributes.description || "No description provided.",
+          description:
+            parsed.attributes.description || "No description provided.",
           directoryPath: skillDirectory,
           skillFilePath,
         });

@@ -1,8 +1,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { CopilotClient, approveAll, defineTool } from "@github/copilot-sdk";
-import { z } from "zod";
+import { CopilotClient, approveAll } from "@github/copilot-sdk";
 
 import type { AppConfig } from "../config/env.js";
 import type { FileSearchService } from "../files/file-search-service.js";
@@ -14,13 +13,16 @@ import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import { SessionRegistry } from "../state/session-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
 import type { SkillService } from "../skills/skill-service.js";
+import { type CopilotAgentRole, getCopilotSessionKey } from "./agent-role.js";
 import { buildTelegramSystemPrompt } from "./prompt.js";
+import { CopilotToolRegistry } from "./tool-registry.js";
 
 type CopilotSessionHandle = Awaited<ReturnType<CopilotClient["createSession"]>>;
 
 export class CopilotService {
   private readonly client: CopilotClient;
   private readonly sessions = new SessionRegistry<CopilotSessionHandle>();
+  private readonly toolRegistry: CopilotToolRegistry;
 
   public constructor(
     private readonly config: AppConfig,
@@ -37,6 +39,15 @@ export class CopilotService {
       cliPath: this.config.copilotCliPath,
       logLevel: this.config.copilotLogLevel,
     });
+    this.toolRegistry = new CopilotToolRegistry({
+      skillService: this.skillService,
+      installRegistry: this.installRegistry,
+      googleWorkspaceService: this.googleWorkspaceService,
+      homeMateService: this.homeMateService,
+      homeMateActionRegistry: this.homeMateActionRegistry,
+      fileSearchService: this.fileSearchService,
+      outboundFileRegistry: this.outboundFileRegistry,
+    });
   }
 
   public async start(): Promise<void> {
@@ -44,31 +55,68 @@ export class CopilotService {
   }
 
   public async stop(): Promise<void> {
-    for (const userId of this.sessions.keys()) {
-      await this.resetSession(userId);
+    for (const sessionKey of this.sessions.keys()) {
+      const session = this.sessions.get(sessionKey);
+      if (!session) {
+        continue;
+      }
+
+      await session.disconnect();
+      this.sessions.delete(sessionKey);
     }
 
     await this.client.stop();
   }
 
-  public async resetSession(userId: string): Promise<void> {
-    const session = this.sessions.get(userId);
+  public async resetSession(
+    userId: string,
+    role: CopilotAgentRole = "primary",
+  ): Promise<void> {
+    const session = this.sessions.get(getCopilotSessionKey(userId, role));
     if (!session) {
       return;
     }
 
     await session.disconnect();
-    this.sessions.delete(userId);
+    this.sessions.delete(getCopilotSessionKey(userId, role));
   }
 
-  public async invalidateSession(userId: string): Promise<void> {
-    await this.resetSession(userId);
+  public async invalidateSession(
+    userId: string,
+    role: CopilotAgentRole = "primary",
+  ): Promise<void> {
+    await this.resetSession(userId, role);
   }
 
-  public async sendPrompt(userId: string, prompt: string): Promise<string> {
+  public async invalidateUserSessions(userId: string): Promise<void> {
+    const sessionKeys = this.sessions
+      .keys()
+      .filter((key) => key.startsWith(`${userId}:`));
+
+    for (const sessionKey of sessionKeys) {
+      const session = this.sessions.get(sessionKey);
+      if (!session) {
+        continue;
+      }
+
+      await session.disconnect();
+      this.sessions.delete(sessionKey);
+    }
+  }
+
+  public async sendPrompt(
+    userId: string,
+    prompt: string,
+    role: CopilotAgentRole = "primary",
+  ): Promise<string> {
+    const timeoutMs =
+      role === "primary"
+        ? this.config.copilotRequestTimeoutMs
+        : this.config.copilotDelegatedRequestTimeoutMs;
+
     try {
-      const session = await this.getOrCreateSession(userId);
-      const response = await session.sendAndWait({ prompt }, 180_000);
+      const session = await this.getOrCreateSession(userId, role);
+      const response = await session.sendAndWait({ prompt }, timeoutMs);
       return (
         response?.data.content?.trim() ||
         "I finished that step, but I did not receive a text reply."
@@ -78,14 +126,15 @@ export class CopilotService {
         "Copilot session failed, retrying with a fresh session",
         {
           userId,
+          role,
           error: error instanceof Error ? error.message : String(error),
         },
       );
 
-      await this.invalidateSession(userId);
-      const session = await this.getOrCreateSession(userId);
+      await this.invalidateSession(userId, role);
+      const session = await this.getOrCreateSession(userId, role);
       try {
-        const response = await session.sendAndWait({ prompt }, 180_000);
+        const response = await session.sendAndWait({ prompt }, timeoutMs);
         return (
           response?.data.content?.trim() ||
           "I finished that step, but I did not receive a text reply."
@@ -93,6 +142,7 @@ export class CopilotService {
       } catch (retryError) {
         this.logger.error("Copilot session failed after retry", {
           userId,
+          role,
           error:
             retryError instanceof Error
               ? retryError.message
@@ -100,7 +150,9 @@ export class CopilotService {
         });
 
         if (isIdleTimeoutError(retryError)) {
-          return "That request took too long to finish. Please try a narrower file description like the exact document name, folder, or extension.";
+          return role === "primary"
+            ? "That request took too long to finish. Please try a narrower scope, such as an exact file name, smaller Gmail query, or one specific task."
+            : "The delegated task took too long to finish. Please retry with a narrower scope or a more specific target.";
         }
 
         throw retryError;
@@ -110,8 +162,10 @@ export class CopilotService {
 
   private async getOrCreateSession(
     userId: string,
+    role: CopilotAgentRole,
   ): Promise<CopilotSessionHandle> {
-    const existing = this.sessions.get(userId);
+    const sessionKey = getCopilotSessionKey(userId, role);
+    const existing = this.sessions.get(sessionKey);
     if (existing) {
       return existing;
     }
@@ -130,277 +184,12 @@ export class CopilotService {
         ...bundledSkillDirectories,
       ],
       systemMessage: {
-        content: buildTelegramSystemPrompt(),
+        content: buildTelegramSystemPrompt(role),
       },
-      tools: [
-        defineTool("search_skill_registry", {
-          description:
-            "Search the skills registry for relevant reusable skills.",
-          parameters: z.object({
-            query: z
-              .string()
-              .min(1)
-              .describe("Search phrase describing the user's goal."),
-          }),
-          handler: async ({ query }) => this.skillService.searchSkills(query),
-        }),
-        defineTool("list_user_skills", {
-          description: "List skills already installed for this Telegram user.",
-          parameters: z.object({}),
-          handler: async () => this.skillService.listInstalledSkills(userId),
-        }),
-        defineTool("queue_skill_install", {
-          description:
-            "Queue a skill installation request that still needs explicit user confirmation.",
-          parameters: z.object({
-            source: z
-              .string()
-              .min(1)
-              .describe("Skill source like owner/repo or a git URL."),
-            skills: z
-              .array(z.string().min(1))
-              .optional()
-              .describe("Specific skill names to install."),
-            reason: z
-              .string()
-              .min(1)
-              .describe("Why this skill helps with the task."),
-            goal: z
-              .string()
-              .min(1)
-              .describe(
-                "Short summary of the user's task to continue after install.",
-              ),
-          }),
-          handler: async ({ source, skills, reason, goal }) => {
-            const pending = this.installRegistry.stage(userId, {
-              source,
-              requestedSkills: skills ?? [],
-              reason,
-              goal,
-            });
-
-            return {
-              queued: true,
-              requestId: pending.id,
-              source: pending.source,
-              requestedSkills: pending.requestedSkills,
-              reason: pending.reason,
-              confirmationMessage:
-                "A pending skill install has been created. Ask the user to reply YES to confirm or NO to cancel.",
-            };
-          },
-        }),
-        defineTool("gmail_connection_status", {
-          description:
-            "Check whether Gmail is available through the configured Google Workspace CLI.",
-          parameters: z.object({}),
-          handler: async () =>
-            safeToolResult(() =>
-              this.googleWorkspaceService.getGmailConnectionStatus(),
-            ),
-        }),
-        defineTool("gmail_list_messages", {
-          description:
-            "List Gmail messages through the configured Google Workspace CLI.",
-          parameters: z.object({
-            query: z
-              .string()
-              .optional()
-              .describe(
-                "Optional Gmail search query, for example is:unread newer_than:7d.",
-              ),
-            maxResults: z
-              .number()
-              .int()
-              .min(1)
-              .max(25)
-              .optional()
-              .describe("Maximum number of messages to return."),
-          }),
-          handler: async ({ query, maxResults }) => {
-            const request = {
-              ...(query ? { query } : {}),
-              ...(maxResults !== undefined ? { maxResults } : {}),
-            };
-
-            return safeToolResult(() =>
-              this.googleWorkspaceService.listGmailMessages(request),
-            );
-          },
-        }),
-        defineTool("gmail_read_message", {
-          description:
-            "Read a Gmail message by id through the configured Google Workspace CLI.",
-          parameters: z.object({
-            messageId: z.string().min(1).describe("The Gmail message id."),
-          }),
-          handler: async ({ messageId }) =>
-            safeToolResult(() =>
-              this.googleWorkspaceService.readGmailMessage(messageId),
-            ),
-        }),
-        defineTool("gmail_send_message", {
-          description:
-            "Send a Gmail message through the configured Google Workspace CLI.",
-          parameters: z.object({
-            to: z
-              .array(z.string().email())
-              .min(1)
-              .describe("Recipient email addresses."),
-            subject: z.string().min(1).describe("Email subject."),
-            body: z.string().min(1).describe("Plain text email body."),
-            cc: z
-              .array(z.string().email())
-              .optional()
-              .describe("Optional CC email addresses."),
-            bcc: z
-              .array(z.string().email())
-              .optional()
-              .describe("Optional BCC email addresses."),
-          }),
-          handler: async ({ to, subject, body, cc, bcc }) => {
-            const request = {
-              to,
-              subject,
-              body,
-              ...(cc ? { cc } : {}),
-              ...(bcc ? { bcc } : {}),
-            };
-
-            return safeToolResult(() =>
-              this.googleWorkspaceService.sendGmailMessage(request),
-            );
-          },
-        }),
-        defineTool("homemate_connection_status", {
-          description:
-            "Check whether the HomeMate API is configured and reachable.",
-          parameters: z.object({}),
-          handler: async () =>
-            safeToolResult(() => this.homeMateService.getConnectionStatus()),
-        }),
-        defineTool("homemate_list_switches", {
-          description:
-            "List available HomeMate smart switches with ids, names, and current states.",
-          parameters: z.object({}),
-          handler: async () =>
-            safeToolResult(() => this.homeMateService.listSwitches()),
-        }),
-        defineTool("homemate_get_switch", {
-          description:
-            "Get the current state of a specific HomeMate smart switch by id or exact name.",
-          parameters: z.object({
-            identifier: z
-              .string()
-              .min(1)
-              .describe("Switch id or exact switch name."),
-          }),
-          handler: async ({ identifier }) =>
-            safeToolResult(() => this.homeMateService.getSwitch(identifier)),
-        }),
-        defineTool("homemate_set_switch_state", {
-          description:
-            "Turn a specific HomeMate smart switch on or off by id or exact name.",
-          parameters: z.object({
-            identifier: z
-              .string()
-              .min(1)
-              .describe("Switch id or exact switch name."),
-            state: z
-              .enum(["on", "off"])
-              .describe("Desired target state for the switch."),
-          }),
-          handler: async ({ identifier, state }) =>
-            safeToolResult(() =>
-              this.homeMateService.setSwitchState(identifier, state),
-            ),
-        }),
-        defineTool("queue_homemate_bulk_switch_state", {
-          description:
-            "Queue a bulk HomeMate switch action that still needs explicit user confirmation.",
-          parameters: z.object({
-            state: z
-              .enum(["on", "off"])
-              .describe("Desired target state for all known switches."),
-          }),
-          handler: async ({ state }) =>
-            safeToolResult(async () => {
-              const staged =
-                await this.homeMateService.stageAllKnownSwitches(state);
-              const pending = this.homeMateActionRegistry.stageBulkSwitchAction(
-                userId,
-                {
-                  requestedState: staged.requestedState,
-                  switchIds: staged.switches.map((entry) => entry.id),
-                  switchNames: staged.switches.map((entry) => entry.name),
-                },
-              );
-
-              return {
-                queued: true,
-                requestId: pending.id,
-                requestedState: pending.requestedState,
-                switchCount: pending.switchIds.length,
-                switchNames: pending.switchNames,
-                confirmationMessage:
-                  "A pending bulk HomeMate switch action has been created. Ask the user to reply YES to confirm or NO to cancel.",
-              };
-            }),
-        }),
-        defineTool("search_local_files", {
-          description:
-            "Search the local machine for files that match a natural-language request using file names, paths, and supported document text.",
-          parameters: z.object({
-            query: z
-              .string()
-              .min(1)
-              .describe(
-                "Natural-language file request such as 'my adhar card image or doc'.",
-              ),
-          }),
-          handler: async ({ query }) =>
-            safeToolResult(() => this.fileSearchService.searchFiles(query)),
-        }),
-        defineTool("queue_telegram_file_send", {
-          description:
-            "Queue a local file to be sent back to the Telegram user after the assistant finishes responding.",
-          parameters: z.object({
-            filePath: z
-              .string()
-              .min(1)
-              .describe(
-                "Absolute file path of the specific file the user selected.",
-              ),
-            caption: z
-              .string()
-              .max(500)
-              .optional()
-              .describe(
-                "Optional short caption to accompany the Telegram file.",
-              ),
-          }),
-          handler: async ({ filePath, caption }) =>
-            safeToolResult(async () => {
-              const file =
-                await this.fileSearchService.getSendableFile(filePath);
-              this.outboundFileRegistry.stage(userId, {
-                filePath: file.absolutePath,
-                ...(caption ? { caption } : {}),
-              });
-
-              return {
-                queued: true,
-                filePath: file.absolutePath,
-                fileName: file.fileName,
-                sizeBytes: file.sizeBytes,
-              };
-            }),
-        }),
-      ],
+      tools: this.toolRegistry.createTools(userId, role),
     });
 
-    this.sessions.set(userId, session);
+    this.sessions.set(sessionKey, session);
     return session;
   }
 
@@ -426,17 +215,4 @@ function isIdleTimeoutError(error: unknown): boolean {
   }
 
   return /session\.idle|timeout after/i.test(error.message);
-}
-
-async function safeToolResult<T>(
-  action: () => Promise<T>,
-): Promise<T | { ok: false; error: string }> {
-  try {
-    return await action();
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
 }
