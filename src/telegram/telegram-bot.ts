@@ -1,3 +1,4 @@
+import { promises as fs } from "node:fs";
 import type { CopilotService } from "../copilot/copilot-service.js";
 import type { GoogleWorkspaceService } from "../google-workspace/google-workspace-service.js";
 import type { HomeMateService } from "../homemate/homemate-service.js";
@@ -604,6 +605,13 @@ export class TelegramBot {
         `Recorded video (${durationSeconds}s)`,
         update.messageId,
       );
+
+      await fs.unlink(result.filePath).catch((e) =>
+        this.logger.warn("Failed to delete video file after send", {
+          filePath: result.filePath,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
     } catch (error) {
       this.logger.error("Failed to stop video recording", {
         userId: update.userId,
@@ -655,6 +663,12 @@ export class TelegramBot {
             pendingFile.filePath,
             pendingFile.caption,
             replyToMessageId,
+          );
+          await fs.unlink(pendingFile.filePath).catch((e) =>
+            this.logger.warn("Failed to delete video file after send", {
+              filePath: pendingFile.filePath,
+              error: e instanceof Error ? e.message : String(e),
+            }),
           );
         } else {
           await this.telegramClient.sendDocument(
