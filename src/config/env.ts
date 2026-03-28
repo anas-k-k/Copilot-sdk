@@ -50,6 +50,9 @@ export interface AppConfig {
   fileSearchContentExtensions: string[];
   fileSearchContentMaxFileSizeBytes: number;
   fileSendMaxFileSizeBytes: number;
+  webcamCaptureCommand: string | undefined;
+  webcamCaptureArgs: string[];
+  webcamCaptureTimeoutMs: number;
   fileSearchAliases: Record<string, string[]>;
   fileSearchMaxDurationMs: number;
   fileSearchMaxFilesScanned: number;
@@ -190,6 +193,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       10 * 1024 * 1024,
       "FILE_SEND_MAX_FILE_SIZE_BYTES",
     ),
+    webcamCaptureCommand: resolveExecutablePath(env.WEBCAM_CAPTURE_COMMAND),
+    webcamCaptureArgs: parseCommandArguments(env.WEBCAM_CAPTURE_ARGS),
+    webcamCaptureTimeoutMs: parsePositiveInteger(
+      env.WEBCAM_CAPTURE_TIMEOUT_MS,
+      120_000,
+      "WEBCAM_CAPTURE_TIMEOUT_MS",
+    ),
     fileSearchAliases: parseAliasMap(env.FILE_SEARCH_ALIASES),
     fileSearchMaxDurationMs: parsePositiveInteger(
       env.FILE_SEARCH_MAX_DURATION_MS,
@@ -202,6 +212,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       "FILE_SEARCH_MAX_FILES_SCANNED",
     ),
   };
+}
+
+function resolveExecutablePath(
+  rawValue: string | undefined,
+): string | undefined {
+  const configuredValue = normalizeOptionalString(rawValue);
+  if (!configuredValue) {
+    return undefined;
+  }
+
+  if (isFilePath(configuredValue)) {
+    return path.resolve(configuredValue);
+  }
+
+  return configuredValue;
 }
 
 function resolveCopilotCliPath(rawValue: string | undefined): string {

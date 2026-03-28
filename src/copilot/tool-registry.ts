@@ -9,6 +9,7 @@ import type { HomeMateService } from "../homemate/homemate-service.js";
 import type { HomeMateActionRegistry } from "../state/homemate-action-registry.js";
 import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
+import type { WebcamCaptureService } from "../webcam/webcam-capture-service.js";
 import type { SkillService } from "../skills/skill-service.js";
 import type { CopilotAgentRole } from "./agent-role.js";
 
@@ -20,6 +21,7 @@ interface ToolRegistryDependencies {
   homeMateActionRegistry: HomeMateActionRegistry;
   fileSearchService: FileSearchService;
   outboundFileRegistry: OutboundFileRegistry;
+  webcamCaptureService: WebcamCaptureService;
 }
 
 export class CopilotToolRegistry {
@@ -258,6 +260,36 @@ export class CopilotToolRegistry {
         }),
         handler: async ({ query }) =>
           safeToolResult(() => this.deps.fileSearchService.searchFiles(query)),
+      }),
+      defineTool("capture_and_queue_webcam_photo", {
+        description:
+          "Open the local webcam capture flow, save a current photo, and queue it to be sent back to the Telegram user as a photo. Use this only when the user explicitly asks for a live or current webcam image.",
+        parameters: z.object({
+          caption: z
+            .string()
+            .max(500)
+            .optional()
+            .describe("Optional short caption to accompany the photo."),
+        }),
+        handler: async ({ caption }) =>
+          safeToolResult(async () => {
+            const captured =
+              await this.deps.webcamCaptureService.capturePhoto(userId);
+
+            this.deps.outboundFileRegistry.stage(userId, {
+              filePath: captured.filePath,
+              delivery: "photo",
+              ...(caption ? { caption } : {}),
+            });
+
+            return {
+              queued: true,
+              filePath: captured.filePath,
+              fileName: captured.fileName,
+              sizeBytes: captured.sizeBytes,
+              captureMethod: captured.captureMethod,
+            };
+          }),
       }),
       defineTool("queue_telegram_file_send", {
         description:

@@ -1,6 +1,7 @@
 export interface PendingOutboundFile {
   filePath: string;
   caption?: string;
+  delivery?: "document" | "photo";
 }
 
 export class OutboundFileRegistry {

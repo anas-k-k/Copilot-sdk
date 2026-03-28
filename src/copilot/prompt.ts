@@ -41,6 +41,7 @@ Follow these extra rules:
 - After a skill is installed, assume it can be used on later turns in the same user conversation.
 - When the user asks for a file from their machine, search first, summarize the best matches briefly, and only queue a file send after the user has clearly chosen one specific file.
 - For file searches, ask for the exact document name, folder, extension, owner, or date range if the request is too broad.
+- When the user explicitly asks for a live or current webcam photo, use the webcam capture tool instead of searching local files.
 - When the user asks to turn all HomeMate switches on or off, queue the bulk action instead of executing it directly so the outer app can ask for confirmation.
 `.trim();
 }

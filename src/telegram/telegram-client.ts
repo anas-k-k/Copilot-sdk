@@ -104,30 +104,39 @@ export class TelegramClient {
     caption?: string,
     replyToMessageId?: number,
   ): Promise<void> {
-    const extension = path.extname(filePath).toLowerCase();
-    const buffer = await fs.readFile(filePath);
-    const formData = new FormData();
-    formData.set("chat_id", String(chatId));
-    formData.set(
+    const formData = await buildTelegramFileFormData(
+      chatId,
+      filePath,
       "document",
-      new File([buffer], path.basename(filePath), {
-        type: getMimeTypeForPath(filePath),
-        }),
+      caption,
+      replyToMessageId,
     );
 
-    if (extension === ".pdf") {
+    if (path.extname(filePath).toLowerCase() === ".pdf") {
       formData.set("disable_content_type_detection", "true");
     }
 
-    if (caption?.trim()) {
-      formData.set("caption", caption.trim());
-    }
-
-    if (replyToMessageId !== undefined) {
-      formData.set("reply_to_message_id", String(replyToMessageId));
-    }
-
     await this.requestTelegram<true>("sendDocument", {
+      method: "POST",
+      body: formData,
+    });
+  }
+
+  public async sendPhoto(
+    chatId: number,
+    filePath: string,
+    caption?: string,
+    replyToMessageId?: number,
+  ): Promise<void> {
+    const formData = await buildTelegramFileFormData(
+      chatId,
+      filePath,
+      "photo",
+      caption,
+      replyToMessageId,
+    );
+
+    await this.requestTelegram<true>("sendPhoto", {
       method: "POST",
       body: formData,
     });
@@ -191,6 +200,34 @@ function getMimeTypeForPath(filePath: string): string {
     default:
       return "application/octet-stream";
   }
+}
+
+async function buildTelegramFileFormData(
+  chatId: number,
+  filePath: string,
+  fieldName: "document" | "photo",
+  caption?: string,
+  replyToMessageId?: number,
+): Promise<FormData> {
+  const buffer = await fs.readFile(filePath);
+  const formData = new FormData();
+  formData.set("chat_id", String(chatId));
+  formData.set(
+    fieldName,
+    new File([buffer], path.basename(filePath), {
+      type: getMimeTypeForPath(filePath),
+    }),
+  );
+
+  if (caption?.trim()) {
+    formData.set("caption", caption.trim());
+  }
+
+  if (replyToMessageId !== undefined) {
+    formData.set("reply_to_message_id", String(replyToMessageId));
+  }
+
+  return formData;
 }
 
 async function readTelegramPayload<TResult>(

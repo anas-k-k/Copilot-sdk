@@ -55,6 +55,9 @@ export function createTestConfig(
     ],
     fileSearchContentMaxFileSizeBytes: 1_000_000,
     fileSendMaxFileSizeBytes: 10 * 1024 * 1024,
+    webcamCaptureCommand: undefined,
+    webcamCaptureArgs: [],
+    webcamCaptureTimeoutMs: 120_000,
     fileSearchAliases: {
       adhar: ["aadhaar", "aadhar"],
       aadhaar: ["adhar", "aadhar"],

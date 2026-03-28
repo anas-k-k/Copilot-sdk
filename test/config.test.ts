@@ -44,6 +44,9 @@ describe("loadConfig", () => {
     expect(config.homeMateApiBaseUrl).toBeUndefined();
     expect(config.homeMateSetSwitchStateMethod).toBe("PATCH");
     expect(config.homeMateBulkSetSwitchStateMethod).toBe("POST");
+    expect(config.webcamCaptureCommand).toBeUndefined();
+    expect(config.webcamCaptureArgs).toEqual([]);
+    expect(config.webcamCaptureTimeoutMs).toBe(120_000);
   });
 
   it("parses allowed Telegram user ids", () => {
@@ -80,6 +83,24 @@ describe("loadConfig", () => {
       '--query="is:unread"',
       "--max={maxResults}",
     ]);
+  });
+
+  it("parses webcam capture command settings", () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "copilot-sdk-env-"));
+    process.chdir(tempDir);
+
+    const config = loadConfig({
+      TELEGRAM_BOT_TOKEN: "token",
+      WEBCAM_CAPTURE_COMMAND: ".\\tools\\capture.cmd",
+      WEBCAM_CAPTURE_ARGS: "--output {outputPath}",
+      WEBCAM_CAPTURE_TIMEOUT_MS: "45000",
+    });
+
+    expect(config.webcamCaptureCommand).toBe(
+      path.resolve(tempDir, ".\\tools\\capture.cmd"),
+    );
+    expect(config.webcamCaptureArgs).toEqual(["--output", "{outputPath}"]);
+    expect(config.webcamCaptureTimeoutMs).toBe(45_000);
   });
 
   it("prefers the local gws shim when configured with the bare command name", () => {

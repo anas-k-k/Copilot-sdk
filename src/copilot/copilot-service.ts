@@ -12,6 +12,7 @@ import type { HomeMateActionRegistry } from "../state/homemate-action-registry.j
 import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import { SessionRegistry } from "../state/session-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
+import type { WebcamCaptureService } from "../webcam/webcam-capture-service.js";
 import type { SkillService } from "../skills/skill-service.js";
 import { type CopilotAgentRole, getCopilotSessionKey } from "./agent-role.js";
 import { buildTelegramSystemPrompt } from "./prompt.js";
@@ -34,6 +35,7 @@ export class CopilotService {
     private readonly homeMateActionRegistry: HomeMateActionRegistry,
     private readonly fileSearchService: FileSearchService,
     private readonly outboundFileRegistry: OutboundFileRegistry,
+    private readonly webcamCaptureService: WebcamCaptureService,
   ) {
     this.client = new CopilotClient({
       cliPath: this.config.copilotCliPath,
@@ -47,6 +49,7 @@ export class CopilotService {
       homeMateActionRegistry: this.homeMateActionRegistry,
       fileSearchService: this.fileSearchService,
       outboundFileRegistry: this.outboundFileRegistry,
+      webcamCaptureService: this.webcamCaptureService,
     });
   }
 

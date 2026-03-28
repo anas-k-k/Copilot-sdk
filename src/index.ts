@@ -11,6 +11,7 @@ import { DelegatedJobDispatcher } from "./subagents/job-dispatcher.js";
 import { SkillService } from "./skills/skill-service.js";
 import { TelegramBot } from "./telegram/telegram-bot.js";
 import { TelegramClient } from "./telegram/telegram-client.js";
+import { WebcamCaptureService } from "./webcam/webcam-capture-service.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   const homeMateActionRegistry = new HomeMateActionRegistry();
   const fileSearchService = new FileSearchService(config, logger);
   const outboundFileRegistry = new OutboundFileRegistry();
+  const webcamCaptureService = new WebcamCaptureService(config, logger);
   const delegatedJobDispatcher = new DelegatedJobDispatcher(
     logger,
     config.delegatedJobTimeoutMs,
@@ -36,6 +38,7 @@ async function main(): Promise<void> {
     homeMateActionRegistry,
     fileSearchService,
     outboundFileRegistry,
+    webcamCaptureService,
   );
   const telegramClient = new TelegramClient(config, logger);
   const telegramBot = new TelegramBot(

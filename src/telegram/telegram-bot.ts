@@ -239,7 +239,7 @@ export class TelegramBot {
         await this.telegramClient.sendMessage(
           update.chatId,
           [
-            "I can chat through Copilot, search skills, install skills after confirmation, and control configured HomeMate switches.",
+            "I can chat through Copilot, search skills, install skills after confirmation, control configured HomeMate switches, and send a live webcam photo when you ask for one.",
             "",
             "Commands:",
             "/help - show this help",
@@ -255,6 +255,7 @@ export class TelegramBot {
             "- list my smart switches",
             "- turn kitchen switch on",
             "- turn all switches off",
+            "- send a live photo from my webcam",
           ].join("\n"),
           update.messageId,
         );
@@ -594,12 +595,21 @@ export class TelegramBot {
   ): Promise<void> {
     for (const pendingFile of pendingFiles) {
       try {
-        await this.telegramClient.sendDocument(
-          chatId,
-          pendingFile.filePath,
-          pendingFile.caption,
-          replyToMessageId,
-        );
+        if (pendingFile.delivery === "photo") {
+          await this.telegramClient.sendPhoto(
+            chatId,
+            pendingFile.filePath,
+            pendingFile.caption,
+            replyToMessageId,
+          );
+        } else {
+          await this.telegramClient.sendDocument(
+            chatId,
+            pendingFile.filePath,
+            pendingFile.caption,
+            replyToMessageId,
+          );
+        }
       } catch (error) {
         this.logger.error("Telegram file upload failed", {
           userId,

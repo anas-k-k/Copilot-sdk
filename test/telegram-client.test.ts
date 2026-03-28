@@ -260,6 +260,42 @@ describe("TelegramClient", () => {
     expect((document as File).type).toBe("application/pdf");
     expect(formData.get("disable_content_type_detection")).toBe("true");
   });
+
+  it("uploads photos through Telegram multipart form data", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-photo-"));
+    const filePath = path.join(root, "webcam-shot.jpg");
+    await writeFile(filePath, "jpeg-bytes", "utf8");
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new TelegramClient(createConfig(), new Logger("error"));
+    await client.sendPhoto(555, filePath, "Live photo", 11);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/bottoken/sendPhoto",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const [, request] = fetchMock.mock.calls[0] ?? [];
+    const formData = request?.body as FormData;
+
+    expect(formData.get("chat_id")).toBe("555");
+    expect(formData.get("caption")).toBe("Live photo");
+    expect(formData.get("reply_to_message_id")).toBe("11");
+
+    const photo = formData.get("photo");
+    expect(photo).toBeInstanceOf(File);
+    expect((photo as File).name).toBe("webcam-shot.jpg");
+    expect((photo as File).type).toBe("image/jpeg");
+  });
 });
 
 function createConfig(): AppConfig {
