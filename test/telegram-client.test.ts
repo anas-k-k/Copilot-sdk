@@ -296,6 +296,42 @@ describe("TelegramClient", () => {
     expect((photo as File).name).toBe("webcam-shot.jpg");
     expect((photo as File).type).toBe("image/jpeg");
   });
+
+  it("uploads videos through Telegram multipart form data", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-video-"));
+    const filePath = path.join(root, "webcam-recording.mp4");
+    await writeFile(filePath, "mp4-bytes", "utf8");
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new TelegramClient(createConfig(), new Logger("error"));
+    await client.sendVideo(555, filePath, "Recorded video (30s)", 12);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/bottoken/sendVideo",
+      expect.objectContaining({ method: "POST" }),
+    );
+
+    const [, request] = fetchMock.mock.calls[0] ?? [];
+    const formData = request?.body as FormData;
+
+    expect(formData.get("chat_id")).toBe("555");
+    expect(formData.get("caption")).toBe("Recorded video (30s)");
+    expect(formData.get("reply_to_message_id")).toBe("12");
+
+    const video = formData.get("video");
+    expect(video).toBeInstanceOf(File);
+    expect((video as File).name).toBe("webcam-recording.mp4");
+    expect((video as File).type).toBe("video/mp4");
+  });
 });
 
 function createConfig(): AppConfig {

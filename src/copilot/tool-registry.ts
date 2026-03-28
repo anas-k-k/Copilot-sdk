@@ -10,6 +10,7 @@ import type { HomeMateActionRegistry } from "../state/homemate-action-registry.j
 import type { OutboundFileRegistry } from "../state/outbound-file-registry.js";
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
 import type { WebcamCaptureService } from "../webcam/webcam-capture-service.js";
+import type { WebcamVideoService } from "../webcam/webcam-video-service.js";
 import type { SkillService } from "../skills/skill-service.js";
 import type { CopilotAgentRole } from "./agent-role.js";
 
@@ -22,6 +23,7 @@ interface ToolRegistryDependencies {
   fileSearchService: FileSearchService;
   outboundFileRegistry: OutboundFileRegistry;
   webcamCaptureService: WebcamCaptureService;
+  webcamVideoService: WebcamVideoService;
 }
 
 export class CopilotToolRegistry {
@@ -288,6 +290,64 @@ export class CopilotToolRegistry {
               fileName: captured.fileName,
               sizeBytes: captured.sizeBytes,
               captureMethod: captured.captureMethod,
+            };
+          }),
+      }),
+      defineTool("start_webcam_video_recording", {
+        description:
+          "Start recording a live video from the local webcam. The recording continues in the background until stop_webcam_video_recording is called or the user says stop. Use this only when the user explicitly asks for a live video recording.",
+        parameters: z.object({
+          caption: z
+            .string()
+            .max(500)
+            .optional()
+            .describe(
+              "Optional short caption to accompany the video when sent.",
+            ),
+        }),
+        handler: async ({ caption }) =>
+          safeToolResult(async () => {
+            const result =
+              await this.deps.webcamVideoService.startRecording(userId);
+
+            // Store caption for later use when the recording is stopped
+            if (caption) {
+              this.deps.outboundFileRegistry.stage(userId, {
+                filePath: "__pending_video_caption__",
+                caption,
+                delivery: "video",
+              });
+            }
+
+            return {
+              started: true,
+              filePath: result.filePath,
+              message:
+                "Video recording started. The user can say stop to end the recording and receive the video.",
+            };
+          }),
+      }),
+      defineTool("stop_webcam_video_recording", {
+        description:
+          "Stop an active webcam video recording and queue the recorded video to be sent back to the Telegram user. Use this when the user asks to stop the recording.",
+        parameters: z.object({}),
+        handler: async () =>
+          safeToolResult(async () => {
+            const result =
+              await this.deps.webcamVideoService.stopRecording(userId);
+
+            this.deps.outboundFileRegistry.stage(userId, {
+              filePath: result.filePath,
+              delivery: "video",
+            });
+
+            return {
+              queued: true,
+              filePath: result.filePath,
+              fileName: result.fileName,
+              sizeBytes: result.sizeBytes,
+              durationMs: result.durationMs,
+              recordingMethod: result.recordingMethod,
             };
           }),
       }),

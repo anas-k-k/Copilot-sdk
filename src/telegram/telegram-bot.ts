@@ -15,12 +15,13 @@ import type {
 import type { SkillInstallRegistry } from "../state/skill-install-registry.js";
 import type { DelegatedJobDispatcher } from "../subagents/job-dispatcher.js";
 import type { SkillService } from "../skills/skill-service.js";
+import type { WebcamVideoService } from "../webcam/webcam-video-service.js";
 import type {
   PendingSkillInstallRequest,
   SkillInstallResult,
   SkillSearchResult,
 } from "../skills/types.js";
-import { isAffirmative, isNegative } from "../utils/text.js";
+import { isAffirmative, isNegative, isStopCommand } from "../utils/text.js";
 import { TelegramApiError } from "./telegram-client.js";
 import { normalizeTelegramUpdate } from "./update-normalizer.js";
 import type { NormalizedTelegramUpdate } from "./types.js";
@@ -49,6 +50,7 @@ export class TelegramBot {
     private readonly homeMateActionRegistry: HomeMateActionRegistry,
     private readonly outboundFileRegistry: OutboundFileRegistry,
     private readonly delegatedJobDispatcher: DelegatedJobDispatcher,
+    private readonly webcamVideoService: WebcamVideoService,
     private readonly logger: Logger,
     private readonly allowedTelegramUserIds: ReadonlySet<string> = new Set(),
     messageQueueTimeoutMs = 300_000,
@@ -176,6 +178,14 @@ export class TelegramBot {
         }
       }
 
+      if (
+        this.webcamVideoService.hasActiveRecording(update.userId) &&
+        isStopCommand(update.text)
+      ) {
+        await this.handleVideoRecordingStop(update);
+        return;
+      }
+
       const response = await this.copilotService.sendPrompt(
         update.userId,
         update.text,
@@ -239,7 +249,7 @@ export class TelegramBot {
         await this.telegramClient.sendMessage(
           update.chatId,
           [
-            "I can chat through Copilot, search skills, install skills after confirmation, control configured HomeMate switches, and send a live webcam photo when you ask for one.",
+            "I can chat through Copilot, search skills, install skills after confirmation, control configured HomeMate switches, send a live webcam photo, and record live webcam video when you ask for one.",
             "",
             "Commands:",
             "/help - show this help",
@@ -256,6 +266,7 @@ export class TelegramBot {
             "- turn kitchen switch on",
             "- turn all switches off",
             "- send a live photo from my webcam",
+            "- record a live video from my webcam (say stop to end)",
           ].join("\n"),
           update.messageId,
         );
@@ -574,6 +585,38 @@ export class TelegramBot {
     return true;
   }
 
+  private async handleVideoRecordingStop(
+    update: NormalizedTelegramUpdate,
+  ): Promise<void> {
+    try {
+      await this.telegramClient.sendMessage(
+        update.chatId,
+        "Stopping the video recording...",
+        update.messageId,
+      );
+
+      const result = await this.webcamVideoService.stopRecording(update.userId);
+
+      const durationSeconds = Math.round(result.durationMs / 1000);
+      await this.telegramClient.sendVideo(
+        update.chatId,
+        result.filePath,
+        `Recorded video (${durationSeconds}s)`,
+        update.messageId,
+      );
+    } catch (error) {
+      this.logger.error("Failed to stop video recording", {
+        userId: update.userId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.telegramClient.sendMessage(
+        update.chatId,
+        `Failed to stop video recording: ${error instanceof Error ? error.message : String(error)}`,
+        update.messageId,
+      );
+    }
+  }
+
   private async flushPendingFiles(
     userId: string,
     chatId: number,
@@ -597,6 +640,17 @@ export class TelegramBot {
       try {
         if (pendingFile.delivery === "photo") {
           await this.telegramClient.sendPhoto(
+            chatId,
+            pendingFile.filePath,
+            pendingFile.caption,
+            replyToMessageId,
+          );
+        } else if (pendingFile.delivery === "video") {
+          // Skip placeholder entries used to store captions
+          if (pendingFile.filePath === "__pending_video_caption__") {
+            continue;
+          }
+          await this.telegramClient.sendVideo(
             chatId,
             pendingFile.filePath,
             pendingFile.caption,

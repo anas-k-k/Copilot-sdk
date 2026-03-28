@@ -94,6 +94,12 @@ export function isNegative(input: string): boolean {
   return /^(?:n|no|cancel|stop|don'?t|do not)\b/i.test(input.trim());
 }
 
+export function isStopCommand(input: string): boolean {
+  return /^(?:stop|end|finish|done|quit|halt|that'?s enough|enough)\b/i.test(
+    input.trim(),
+  );
+}
+
 function rewritePreformattedBlocks(text: string): {
   text: string;
   blocks: string[];

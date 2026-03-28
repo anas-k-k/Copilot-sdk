@@ -16,6 +16,15 @@ function createDispatcher(): DelegatedJobDispatcher {
   } as never;
 }
 
+function createMockVideoService() {
+  return {
+    hasActiveRecording: vi.fn().mockReturnValue(false),
+    startRecording: vi.fn(),
+    stopRecording: vi.fn(),
+    stopAll: vi.fn(),
+  };
+}
+
 describe("TelegramBot", () => {
   it("stops polling after a getUpdates conflict", async () => {
     let deleteWebhookCalls = 0;
@@ -51,6 +60,7 @@ describe("TelegramBot", () => {
       new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       createDispatcher(),
+      createMockVideoService() as never,
       new Logger("info"),
       new Set(),
     );
@@ -118,6 +128,7 @@ describe("TelegramBot", () => {
       new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       createDispatcher(),
+      createMockVideoService() as never,
       new Logger("debug"),
       new Set(["8661077453"]),
     );
@@ -198,6 +209,7 @@ describe("TelegramBot", () => {
       new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       createDispatcher(),
+      createMockVideoService() as never,
       new Logger("info"),
       new Set(),
     );
@@ -285,6 +297,7 @@ describe("TelegramBot", () => {
       new HomeMateActionRegistry(),
       outboundFileRegistry,
       createDispatcher(),
+      createMockVideoService() as never,
       new Logger("info"),
       new Set(),
     );
@@ -388,6 +401,7 @@ describe("TelegramBot", () => {
       actionRegistry,
       new OutboundFileRegistry(),
       createDispatcher(),
+      createMockVideoService() as never,
       new Logger("info"),
       new Set(),
     );
@@ -500,6 +514,7 @@ describe("TelegramBot", () => {
       new HomeMateActionRegistry(),
       new OutboundFileRegistry(),
       dispatcher,
+      createMockVideoService() as never,
       new Logger("info"),
       new Set(),
     );

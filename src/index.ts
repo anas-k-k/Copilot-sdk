@@ -12,6 +12,7 @@ import { SkillService } from "./skills/skill-service.js";
 import { TelegramBot } from "./telegram/telegram-bot.js";
 import { TelegramClient } from "./telegram/telegram-client.js";
 import { WebcamCaptureService } from "./webcam/webcam-capture-service.js";
+import { WebcamVideoService } from "./webcam/webcam-video-service.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -24,6 +25,7 @@ async function main(): Promise<void> {
   const fileSearchService = new FileSearchService(config, logger);
   const outboundFileRegistry = new OutboundFileRegistry();
   const webcamCaptureService = new WebcamCaptureService(config, logger);
+  const webcamVideoService = new WebcamVideoService(config, logger);
   const delegatedJobDispatcher = new DelegatedJobDispatcher(
     logger,
     config.delegatedJobTimeoutMs,
@@ -39,6 +41,7 @@ async function main(): Promise<void> {
     fileSearchService,
     outboundFileRegistry,
     webcamCaptureService,
+    webcamVideoService,
   );
   const telegramClient = new TelegramClient(config, logger);
   const telegramBot = new TelegramBot(
@@ -51,12 +54,13 @@ async function main(): Promise<void> {
     homeMateActionRegistry,
     outboundFileRegistry,
     delegatedJobDispatcher,
+    webcamVideoService,
     logger,
     new Set(config.telegramAllowedUserIds),
     config.messageQueueTimeoutMs,
   );
 
-  registerShutdown(logger, telegramBot, copilotService);
+  registerShutdown(logger, telegramBot, copilotService, webcamVideoService);
 
   await copilotService.start();
   logger.info("Copilot client started");
@@ -68,6 +72,7 @@ function registerShutdown(
   logger: Logger,
   telegramBot: TelegramBot,
   copilotService: CopilotService,
+  webcamVideoService: WebcamVideoService,
 ): void {
   let shuttingDown = false;
 
@@ -79,6 +84,7 @@ function registerShutdown(
     shuttingDown = true;
     logger.info("Shutting down", { signal });
     telegramBot.stop();
+    webcamVideoService.stopAll();
     await copilotService.stop();
     process.exit(0);
   };

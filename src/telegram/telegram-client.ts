@@ -142,6 +142,26 @@ export class TelegramClient {
     });
   }
 
+  public async sendVideo(
+    chatId: number,
+    filePath: string,
+    caption?: string,
+    replyToMessageId?: number,
+  ): Promise<void> {
+    const formData = await buildTelegramFileFormData(
+      chatId,
+      filePath,
+      "video",
+      caption,
+      replyToMessageId,
+    );
+
+    await this.requestTelegram<true>("sendVideo", {
+      method: "POST",
+      body: formData,
+    });
+  }
+
   private async requestTelegram<TResult>(
     method: string,
     options:
@@ -197,6 +217,12 @@ function getMimeTypeForPath(filePath: string): string {
       return "image/gif";
     case ".webp":
       return "image/webp";
+    case ".mp4":
+      return "video/mp4";
+    case ".avi":
+      return "video/x-msvideo";
+    case ".mkv":
+      return "video/x-matroska";
     default:
       return "application/octet-stream";
   }
@@ -205,7 +231,7 @@ function getMimeTypeForPath(filePath: string): string {
 async function buildTelegramFileFormData(
   chatId: number,
   filePath: string,
-  fieldName: "document" | "photo",
+  fieldName: "document" | "photo" | "video",
   caption?: string,
   replyToMessageId?: number,
 ): Promise<FormData> {

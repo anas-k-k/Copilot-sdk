@@ -47,6 +47,10 @@ describe("loadConfig", () => {
     expect(config.webcamCaptureCommand).toBeUndefined();
     expect(config.webcamCaptureArgs).toEqual([]);
     expect(config.webcamCaptureTimeoutMs).toBe(120_000);
+    expect(config.webcamVideoCommand).toBeUndefined();
+    expect(config.webcamVideoArgs).toEqual([]);
+    expect(config.webcamVideoMaxDurationMs).toBe(300_000);
+    expect(config.webcamVideoMaxFileSizeBytes).toBe(50 * 1024 * 1024);
   });
 
   it("parses allowed Telegram user ids", () => {

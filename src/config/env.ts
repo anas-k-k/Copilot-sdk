@@ -53,6 +53,10 @@ export interface AppConfig {
   webcamCaptureCommand: string | undefined;
   webcamCaptureArgs: string[];
   webcamCaptureTimeoutMs: number;
+  webcamVideoCommand: string | undefined;
+  webcamVideoArgs: string[];
+  webcamVideoMaxDurationMs: number;
+  webcamVideoMaxFileSizeBytes: number;
   fileSearchAliases: Record<string, string[]>;
   fileSearchMaxDurationMs: number;
   fileSearchMaxFilesScanned: number;
@@ -199,6 +203,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       env.WEBCAM_CAPTURE_TIMEOUT_MS,
       120_000,
       "WEBCAM_CAPTURE_TIMEOUT_MS",
+    ),
+    webcamVideoCommand: resolveExecutablePath(env.WEBCAM_VIDEO_COMMAND),
+    webcamVideoArgs: parseCommandArguments(env.WEBCAM_VIDEO_ARGS),
+    webcamVideoMaxDurationMs: parsePositiveInteger(
+      env.WEBCAM_VIDEO_MAX_DURATION_MS,
+      300_000,
+      "WEBCAM_VIDEO_MAX_DURATION_MS",
+    ),
+    webcamVideoMaxFileSizeBytes: parsePositiveInteger(
+      env.WEBCAM_VIDEO_MAX_FILE_SIZE_BYTES,
+      50 * 1024 * 1024,
+      "WEBCAM_VIDEO_MAX_FILE_SIZE_BYTES",
     ),
     fileSearchAliases: parseAliasMap(env.FILE_SEARCH_ALIASES),
     fileSearchMaxDurationMs: parsePositiveInteger(
