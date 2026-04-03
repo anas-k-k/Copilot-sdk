@@ -3,6 +3,10 @@ import type { NormalizedTelegramUpdate, TelegramUpdate } from "./types.js";
 export function normalizeTelegramUpdate(
   update: TelegramUpdate,
 ): NormalizedTelegramUpdate | undefined {
+  if (update.callback_query) {
+    return normalizeCallbackQuery(update);
+  }
+
   const message = update.message;
   if (!message?.text?.trim() || !message.from) {
     return undefined;
@@ -24,5 +28,29 @@ export function normalizeTelegramUpdate(
     text,
     commandName,
     commandArgs,
+  };
+}
+
+function normalizeCallbackQuery(
+  update: TelegramUpdate,
+): NormalizedTelegramUpdate | undefined {
+  const cbq = update.callback_query!;
+  if (!cbq.data || !cbq.message) {
+    return undefined;
+  }
+
+  const [commandName, ...argParts] = cbq.data.split(":");
+  const commandArgs = argParts.join(":").trim() || undefined;
+
+  return {
+    updateId: update.update_id,
+    messageId: cbq.message.message_id,
+    chatId: cbq.message.chat.id,
+    userId: String(cbq.from.id),
+    username: cbq.from.username,
+    text: cbq.data,
+    commandName,
+    commandArgs,
+    callbackQueryId: cbq.id,
   };
 }

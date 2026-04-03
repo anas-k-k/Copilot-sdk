@@ -255,7 +255,7 @@ describe("TelegramBot", () => {
               update_id: 1,
               message: {
                 message_id: 10,
-                text: "hello",
+                text: "use gpt5 hello",
                 chat: { id: 555 },
                 from: { id: 8661077453, username: "anas" },
               },

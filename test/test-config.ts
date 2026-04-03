@@ -69,6 +69,8 @@ export function createTestConfig(
     },
     fileSearchMaxDurationMs: 15_000,
     fileSearchMaxFilesScanned: 20_000,
+    ollamaBaseUrl: "http://localhost:11434",
+    ollamaModel: "gemma4:e2b",
     ...overrides,
   };
 }

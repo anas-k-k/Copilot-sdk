@@ -27,6 +27,10 @@ import { TelegramApiError } from "./telegram-client.js";
 import { normalizeTelegramUpdate } from "./update-normalizer.js";
 import type { NormalizedTelegramUpdate } from "./types.js";
 import type { TelegramClient } from "./telegram-client.js";
+import type { OllamaProvider } from "../providers/ollama-provider.js";
+import { MODELS, findModel } from "../providers/models.js";
+import { createSession, resetSession } from "../state/chat-session.js";
+import type { ChatSession } from "../state/chat-session.js";
 
 const telegramTypingRefreshIntervalMs = 4_000;
 
@@ -38,6 +42,8 @@ interface SkillInstallJobResult {
 
 export class TelegramBot {
   private readonly messageQueue: MessageQueue;
+  private readonly ollamaProvider: OllamaProvider;
+  private readonly chatSessions = new Map<string, ChatSession>();
   private offset: number | undefined;
   private stopped = false;
 
@@ -55,8 +61,10 @@ export class TelegramBot {
     private readonly logger: Logger,
     private readonly allowedTelegramUserIds: ReadonlySet<string> = new Set(),
     messageQueueTimeoutMs = 300_000,
+    ollamaProvider?: OllamaProvider,
   ) {
     this.messageQueue = new MessageQueue(messageQueueTimeoutMs);
+    this.ollamaProvider = ollamaProvider as OllamaProvider;
   }
 
   public async start(): Promise<void> {
@@ -106,6 +114,12 @@ export class TelegramBot {
                 await this.telegramClient.sendMessage(
                   normalized.chatId,
                   "That task is still running longer than expected, so I released your queue. You can keep chatting, or retry with a narrower scope.",
+                  normalized.messageId,
+                );
+              } else if (normalized.commandName) {
+                await this.telegramClient.sendMessage(
+                  normalized.chatId,
+                  `Command failed: ${error instanceof Error ? error.message : String(error)}`,
                   normalized.messageId,
                 );
               }
@@ -187,10 +201,22 @@ export class TelegramBot {
         return;
       }
 
-      const response = await this.copilotService.sendPrompt(
-        update.userId,
-        update.text,
-      );
+      const session = this.getOrCreateSession(update.userId);
+      const model = findModel(session.selectedModelId);
+      let response: string;
+
+      if (!model || model.backend === "ollama") {
+        const result = await this.ollamaProvider.chat(
+          update.text,
+          update.userId,
+          session.ollamaHistory,
+        );
+        response = result.response;
+        session.ollamaHistory = result.updatedHistory;
+      } else {
+        response = await this.copilotService.sendPrompt(update.userId, update.text);
+      }
+
       await this.telegramClient.sendMessage(
         update.chatId,
         response,
@@ -250,11 +276,12 @@ export class TelegramBot {
         await this.telegramClient.sendMessage(
           update.chatId,
           [
-            "I can chat through Copilot, search skills, install skills after confirmation, control configured HomeMate switches, send a live webcam photo, and record live webcam video when you ask for one.",
+            "I can chat through Copilot or Gemma 4 (local), search skills, install skills after confirmation, control configured HomeMate switches, send a live webcam photo, and record live webcam video when you ask for one.",
             "",
             "Commands:",
             "/help - show this help",
-            "/reset - start a fresh Copilot session",
+            "/new - start a fresh session and choose a model",
+            "/reset - start a fresh session and choose a model",
             "/skills - list your installed skills",
             "/searchskill <query> - search for relevant skills",
             "/installskill <source> [skill1,skill2] - queue a skill install",
@@ -277,11 +304,8 @@ export class TelegramBot {
       case "new":
         this.installRegistry.clearPending(update.userId);
         await this.copilotService.invalidateUserSessions(update.userId);
-        await this.telegramClient.sendMessage(
-          update.chatId,
-          "Started a fresh session.",
-          update.messageId,
-        );
+        this.resetUserSession(update.userId);
+        await this.sendModelPicker(update.chatId);
         return;
 
       case "skills": {
@@ -425,6 +449,23 @@ export class TelegramBot {
             update.chatId,
             `Gmail read failed: ${error instanceof Error ? error.message : String(error)}`,
             update.messageId,
+          );
+        }
+        return;
+      }
+
+      case "set_model": {
+        if (update.callbackQueryId) {
+          await this.telegramClient.answerCallbackQuery(update.callbackQueryId);
+        }
+        const modelId = update.commandArgs;
+        const model = modelId ? findModel(modelId) : undefined;
+        if (model) {
+          const session = this.getOrCreateSession(update.userId);
+          session.selectedModelId = modelId!;
+          await this.telegramClient.sendMessage(
+            update.chatId,
+            `✅ Model set to *${model.label}*. Send your first message to start!`,
           );
         }
         return;
@@ -623,6 +664,37 @@ export class TelegramBot {
         update.messageId,
       );
     }
+  }
+
+  private getOrCreateSession(userId: string): ChatSession {
+    let session = this.chatSessions.get(userId);
+    if (!session) {
+      session = createSession();
+      this.chatSessions.set(userId, session);
+    }
+    return session;
+  }
+
+  private resetUserSession(userId: string): void {
+    const session = this.chatSessions.get(userId);
+    if (session) {
+      resetSession(session);
+    } else {
+      this.chatSessions.set(userId, createSession());
+    }
+  }
+
+  private async sendModelPicker(chatId: number): Promise<void> {
+    const buttons = MODELS.map((model) => ({
+      label: model.isDefault ? `✅ ${model.label} (default)` : model.label,
+      callbackData: `set_model:${model.id}`,
+    }));
+
+    await this.telegramClient.sendMessageWithInlineKeyboard(
+      chatId,
+      "Fresh session started. Choose a model:",
+      buttons,
+    );
   }
 
   private async flushPendingFiles(

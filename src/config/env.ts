@@ -60,6 +60,8 @@ export interface AppConfig {
   fileSearchAliases: Record<string, string[]>;
   fileSearchMaxDurationMs: number;
   fileSearchMaxFilesScanned: number;
+  ollamaBaseUrl: string;
+  ollamaModel: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -227,6 +229,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       20_000,
       "FILE_SEARCH_MAX_FILES_SCANNED",
     ),
+    ollamaBaseUrl:
+      env.OLLAMA_BASE_URL?.trim() || "http://localhost:11434",
+    ollamaModel: env.OLLAMA_MODEL?.trim() || "gemma4:e2b",
   };
 }
 

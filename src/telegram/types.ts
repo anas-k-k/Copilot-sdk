@@ -1,6 +1,7 @@
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  callback_query?: TelegramCallbackQuery;
 }
 
 export interface TelegramMessage {
@@ -13,6 +14,21 @@ export interface TelegramMessage {
     id: number;
     username?: string;
   };
+}
+
+export interface TelegramCallbackQuery {
+  id: string;
+  from: {
+    id: number;
+    username?: string;
+  };
+  message?: {
+    message_id: number;
+    chat: {
+      id: number;
+    };
+  };
+  data?: string;
 }
 
 export interface TelegramApiResponse<T> {
@@ -31,4 +47,5 @@ export interface NormalizedTelegramUpdate {
   text: string;
   commandName: string | undefined;
   commandArgs: string | undefined;
+  callbackQueryId?: string;
 }

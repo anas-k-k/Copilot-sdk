@@ -44,6 +44,11 @@ export class TelegramClient {
       String(this.config.telegramPollingTimeoutSeconds),
     );
 
+    url.searchParams.set(
+      "allowed_updates",
+      JSON.stringify(["message", "callback_query"]),
+    );
+
     return this.requestTelegram<TelegramUpdate[]>("getUpdates", {
       method: "GET",
       url,
@@ -159,6 +164,34 @@ export class TelegramClient {
     await this.requestTelegram<true>("sendVideo", {
       method: "POST",
       body: formData,
+    });
+  }
+
+  public async sendMessageWithInlineKeyboard(
+    chatId: number,
+    text: string,
+    buttons: Array<{ label: string; callbackData: string }>,
+  ): Promise<void> {
+    const inlineKeyboard = buttons.map((btn) => [
+      { text: btn.label, callback_data: btn.callbackData },
+    ]);
+
+    await this.requestTelegram<true>("sendMessage", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        reply_markup: { inline_keyboard: inlineKeyboard },
+      }),
+    });
+  }
+
+  public async answerCallbackQuery(callbackQueryId: string): Promise<void> {
+    await this.requestTelegram<true>("answerCallbackQuery", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ callback_query_id: callbackQueryId }),
     });
   }
 
